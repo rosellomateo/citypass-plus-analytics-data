@@ -10,6 +10,35 @@ app = func.FunctionApp()
 
 CONTAINER_NAME = "bronze"
 
+# Mapea el dominio de negocio (tercer segmento del eventType, ej. "emergencias"
+# en "com.citypass.emergencias.AlertaEmergencia") al nombre de carpeta en el storage.
+# Agregar acá una entrada por cada dominio nuevo.
+DOMINIOS = {
+    "emergencias": "Emergencias y Seguridad",
+    "reclamos": "Reclamos",
+    "espacios": "Espacios Publicos y Cultura",
+    "residuos": "Gestion de residuos inteligente",
+    "movilidad": "Movilidad Urbana"
+}
+
+CARPETA_DEFAULT = "Otros"
+
+
+def resolver_carpeta_y_tipo(event_type: str) -> tuple[str, str]:
+    """A partir del eventType (ej. com.citypass.emergencias.AlertaEmergencia)
+    devuelve ('Dominio/Subcarpeta', tipo_evento), usando el 3er segmento como
+    dominio (traducido via DOMINIOS) y el último segmento como subcarpeta y
+    tipo de evento."""
+    partes = event_type.split(".")
+    if len(partes) < 4:
+        return CARPETA_DEFAULT, "evento"
+
+    dominio_key = partes[2]
+    tipo_evento = partes[-1]
+    dominio = DOMINIOS.get(dominio_key, dominio_key)
+    return f"{dominio}/{tipo_evento}", tipo_evento
+
+
 @app.route(route="ingesta_eventos", auth_level=func.AuthLevel.FUNCTION)
 def ingesta_eventos(req: func.HttpRequest) -> func.HttpResponse:
     logging.info("Recibida una solicitud de ingesta de evento")
@@ -37,9 +66,12 @@ def ingesta_eventos(req: func.HttpRequest) -> func.HttpResponse:
         blob_service_client = BlobServiceClient.from_connection_string(connection_string)
         container_client = blob_service_client.get_container_client(CONTAINER_NAME)
 
+        event_type = evento.get("metadata", {}).get("eventType", "") if isinstance(evento, dict) else ""
+        carpeta, tipo_evento = resolver_carpeta_y_tipo(event_type)
+
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         evento_id = str(uuid.uuid4())[:8]
-        nombre_archivo = f"evento_{timestamp}_{evento_id}.json"
+        nombre_archivo = f"{carpeta}/{tipo_evento}_{timestamp}_{evento_id}.json"
 
         contenido = json.dumps(evento, ensure_ascii=False)
         container_client.upload_blob(name=nombre_archivo, data=contenido, overwrite=False)
