@@ -30,23 +30,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        run: pip install --target="./.python_packages/lib/site-packages" -r requirements.txt
-
-      # Optional: Add step to run tests here
-
       - name: Zip artifact for deployment
         run: |
           shopt -s dotglob
-          zip release.zip ./* -r
+          zip release.zip ./* -r -x ".git/*" -x ".github/*" -x ".venv/*" -x "venv/*"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            release.zip
-            !venv/
+          path: release.zip
 
   deploy:
     runs-on: ubuntu-latest
