@@ -1,0 +1,11 @@
+.venv/
+.git/
+.github/
+.vscode/
+.claude/
+.python_packages/
+__pycache__/
+*.pyc
+scripts/
+local.settings.json
+README.md
