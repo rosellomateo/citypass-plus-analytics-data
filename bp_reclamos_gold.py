@@ -79,7 +79,7 @@ def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = 
         )
         .reset_index()
     )
-    resumen["fecha_snapshot"] = fecha_snapshot or datetime.now(timezone.utc)
+    resumen["fecha_snapshot"] = (fecha_snapshot or datetime.now(timezone.utc)).date()
     return resumen
 
 
