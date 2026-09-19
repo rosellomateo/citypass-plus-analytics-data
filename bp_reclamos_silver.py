@@ -1,3 +1,14 @@
+"""Capa silver de reclamos.
+
+Timer trigger diario que lee los eventos crudos de bronze/Reclamos/
+(ReclamoCreado y ReclamoActualizado) y arma una tabla desnormalizada en
+silver/Reclamos/reclamos.parquet: una fila por reclamo, con el historial de
+fechas por estado, estado_actual/estado_anterior y unos booleanos derivados.
+
+Procesa solo lo nuevo desde la ultima corrida (ver checkpoint mas abajo), no
+relee bronze entero cada vez. Para reprocesar todo el historico (por ejemplo
+si cambia el esquema de la tabla) usar scripts/reprocesar_reclamos_silver.py.
+"""
 import azure.functions as func
 import logging
 import json
@@ -10,6 +21,8 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient
 
 bp = func.Blueprint()
+
+# --- Configuracion: containers, paths de blobs ---------------------------
 
 BRONZE_CONTAINER_NAME = "bronze"
 SILVER_CONTAINER_NAME = "silver"
@@ -29,6 +42,7 @@ ESTADOS = [
 ]
 
 COLUMNA_FECHA_POR_ESTADO = {estado: f"fecha_{estado.lower()}" for estado in ESTADOS}
+# Excepcion de nombre: RECIBIDO se guarda como fecha_creado, no fecha_recibido.
 COLUMNA_FECHA_POR_ESTADO["RECIBIDO"] = "fecha_creado"
 ESTADO_POR_COLUMNA_FECHA = {columna: estado for estado, columna in COLUMNA_FECHA_POR_ESTADO.items()}
 
@@ -60,13 +74,20 @@ COLUMNAS = [
 ]
 
 
+# --- Helpers para armar/actualizar una fila de la tabla -------------------
+
 def _epoch_ms_a_datetime(epoch_ms):
+    """Timestamps de los eventos vienen en epoch millis; los pasamos a
+    datetime UTC para poder compararlos y guardarlos como fecha en el
+    parquet."""
     if epoch_ms is None:
         return None
     return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
 
 
 def dataframe_vacio() -> pd.DataFrame:
+    """Tabla vacia con el esquema completo ya tipado (fechas UTC, booleanos),
+    para arrancar desde cero o cuando todavia no existe el parquet en silver."""
     df = pd.DataFrame(columns=COLUMNAS)
     for col in COLUMNA_FECHA_POR_ESTADO.values():
         df[col] = pd.to_datetime(df[col], utc=True)
@@ -76,6 +97,9 @@ def dataframe_vacio() -> pd.DataFrame:
 
 
 def _fila_nueva(reclamo_id: str) -> dict:
+    """Fila placeholder para un reclamoId que todavia no tiene datos (se usa
+    tanto para un ReclamoCreado nuevo como para un ReclamoActualizado que
+    llega antes que su ReclamoCreado)."""
     fila = {col: None for col in COLUMNAS}
     fila["reclamoId"] = reclamo_id
     fila["resuelto"] = False
@@ -103,6 +127,8 @@ def _actualizar_estado_actual(df: pd.DataFrame, idx) -> None:
 
 
 def _actualizar_derivados(df: pd.DataFrame, idx) -> None:
+    """Recalcula, para una fila, todo lo que depende de las fechas de estado
+    ya cargadas: los booleanos y estado_actual."""
     df.at[idx, "resuelto"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["RESUELTO"]])
     df.at[idx, "rechazado"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["RECHAZADO"]])
     df.at[idx, "cerrado"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["CERRADO"]])
@@ -122,6 +148,8 @@ def _es_la_transicion_mas_reciente(df: pd.DataFrame, idx, fecha) -> bool:
         return True
     return fecha is not None and fecha >= max(fechas_existentes)
 
+
+# --- Aplicar eventos (Creado / Actualizado) sobre el DataFrame ------------
 
 def upsert_creado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
     """Alta o completado de la fila del reclamo a partir de un ReclamoCreado.
@@ -179,6 +207,8 @@ def aplicar_actualizado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
     return df
 
 
+# --- Acceso a storage (bronze/silver) -------------------------------------
+
 def _get_container_client(nombre_container: str):
     connection_string = os.environ["STORAGE_CONNECTION_STRING"]
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
@@ -211,6 +241,8 @@ def escribir_checkpoint(momento: datetime) -> None:
 
 
 def leer_tabla(blob_client) -> pd.DataFrame:
+    """Descarga la tabla de silver; si todavia no existe (primera corrida),
+    devuelve el esquema vacio en vez de fallar."""
     try:
         contenido = blob_client.download_blob().readall()
     except ResourceNotFoundError:
@@ -224,6 +256,8 @@ def escribir_tabla(blob_client, df: pd.DataFrame) -> None:
     buffer.seek(0)
     blob_client.upload_blob(buffer, overwrite=True)
 
+
+# --- Dispatcher: aplica el evento correcto segun su eventType -------------
 
 def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
     """Aplica un evento de reclamos (Creado o Actualizado) al DataFrame.
@@ -240,6 +274,8 @@ def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
     logging.warning(f"eventType inesperado para reclamos: {event_type!r}")
     return None
 
+
+# --- Trigger: corre 1 vez por dia -----------------------------------------
 
 @bp.timer_trigger(
     schedule="0 0 0 * * *",
