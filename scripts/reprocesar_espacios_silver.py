@@ -19,7 +19,7 @@ from _storage import blob_service_client, connection_string  # noqa: E402
 
 os.environ.setdefault("STORAGE_CONNECTION_STRING", connection_string())
 
-from bp_espacios_silver import (  # noqa: E402
+from espacios.bp_espacios_silver import (  # noqa: E402
     aplicar_evento,
     dataframe_vacio,
     escribir_tabla,

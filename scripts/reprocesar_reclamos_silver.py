@@ -25,7 +25,7 @@ from _storage import blob_service_client, connection_string  # noqa: E402
 # correr este script suelto hay que cargarla nosotros primero.
 os.environ.setdefault("STORAGE_CONNECTION_STRING", connection_string())
 
-from bp_reclamos_silver import (  # noqa: E402
+from reclamos.bp_reclamos_silver import (  # noqa: E402
     aplicar_evento,
     dataframe_vacio,
     escribir_tabla,

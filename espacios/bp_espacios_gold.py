@@ -33,8 +33,8 @@ import pandas as pd
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient
 
-from bp_espacios_silver import leer_tabla
-from bp_espacios_silver import get_blob_client as get_silver_blob_client
+from .bp_espacios_silver import leer_tabla
+from .bp_espacios_silver import get_blob_client as get_silver_blob_client
 
 bp = func.Blueprint()
 
