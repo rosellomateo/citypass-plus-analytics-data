@@ -85,4 +85,4 @@ if __name__ == "__main__":
         main()
     else:
         # Se corrio desde el editor sin argumentos: editar estos valores a mano.
-        mostrar_tabla(dominio="emergencias")
+        mostrar_tabla(dominio="reclamos")

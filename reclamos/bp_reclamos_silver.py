@@ -68,6 +68,7 @@ COLUMNAS = [
     *COLUMNA_FECHA_POR_ESTADO.values(),
     "estado_actual",
     "estado_anterior",
+    "eventos_actualizado_aplicados",
     "resuelto",
     "rechazado",
     "cerrado",
@@ -105,6 +106,7 @@ def _fila_nueva(reclamo_id: str) -> dict:
     fila["resuelto"] = False
     fila["rechazado"] = False
     fila["cerrado"] = False
+    fila["eventos_actualizado_aplicados"] = []
     return fila
 
 
@@ -153,11 +155,35 @@ def _es_la_transicion_mas_reciente(df: pd.DataFrame, idx, fecha) -> bool:
 
 def upsert_creado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
     """Alta o completado de la fila del reclamo a partir de un ReclamoCreado.
-    Si ya existia una fila (por haber llegado antes un ReclamoActualizado),
-    no pisa las fechas de estado que ya estaban cargadas."""
-    reclamo_id = data.get("reclamoId")
+    Un reclamo solo tiene un evento de creacion valido: si la fila ya tiene
+    fecha_creado cargada, cualquier ReclamoCreado adicional es una
+    reentrega (o una correccion tardia del mismo evento) y se ignora, sin
+    pisar titulo/categoria/direccion/etc. ya cargados.
 
-    if reclamo_id not in df["reclamoId"].values:
+    El desempate usa el createdAt del propio evento (se queda con el mas
+    antiguo), no el orden en que se procesan los blobs: ese orden depende
+    de blob.last_modified, que puede empatar (o desempatar por nombre de
+    blob, esencialmente al azar) cuando dos ReclamoCreado del mismo
+    reclamoId se suben casi al mismo tiempo.
+
+    Si ya existia una fila (por haber llegado antes un ReclamoActualizado),
+    tampoco pisa las fechas de estado que ya estaban cargadas."""
+    reclamo_id = data.get("reclamoId")
+    columna_recibido = COLUMNA_FECHA_POR_ESTADO["RECIBIDO"]
+    fecha_creado = _epoch_ms_a_datetime(data.get("createdAt"))
+
+    if reclamo_id in df["reclamoId"].values:
+        idx = df.index[df["reclamoId"] == reclamo_id][0]
+        fecha_creado_actual = df.at[idx, columna_recibido]
+        if pd.notna(fecha_creado_actual):
+            if fecha_creado is None or fecha_creado >= fecha_creado_actual:
+                logging.info(f"ReclamoCreado duplicado para {reclamo_id}, se ignora.")
+                return df
+            logging.info(
+                f"ReclamoCreado duplicado para {reclamo_id} con createdAt mas antiguo "
+                "que el ya aplicado: reemplaza los datos base."
+            )
+    else:
         df = pd.concat([df, pd.DataFrame([_fila_nueva(reclamo_id)])], ignore_index=True)
 
     idx = df.index[df["reclamoId"] == reclamo_id][0]
@@ -166,22 +192,27 @@ def upsert_creado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
         if col != "reclamoId":
             df.at[idx, col] = data.get(col)
 
-    columna_recibido = COLUMNA_FECHA_POR_ESTADO["RECIBIDO"]
-    if pd.isna(df.at[idx, columna_recibido]):
-        fecha_creado = _epoch_ms_a_datetime(data.get("createdAt"))
-        if _es_la_transicion_mas_reciente(df, idx, fecha_creado):
-            # RECIBIDO por creacion no tiene estado anterior.
-            df.at[idx, "estado_anterior"] = None
-        df.at[idx, columna_recibido] = fecha_creado
+    if _es_la_transicion_mas_reciente(df, idx, fecha_creado):
+        # RECIBIDO por creacion no tiene estado anterior.
+        df.at[idx, "estado_anterior"] = None
+    df.at[idx, columna_recibido] = fecha_creado
 
     _actualizar_derivados(df, idx)
     return df
 
 
-def aplicar_actualizado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
+def aplicar_actualizado(df: pd.DataFrame, data: dict, event_id: str | None = None) -> pd.DataFrame:
     """Aplica un ReclamoActualizado: completa fecha_<estadoNuevo> en la fila
     del reclamo (creando una fila placeholder si el ReclamoCreado todavia no
-    llego)."""
+    llego).
+
+    A diferencia de ReclamoCreado, un reclamo SI puede volver a pasar por un
+    estado ya visitado (ej. EN_REVISION -> RECIBIDO esta documentado como
+    valido), asi que "ese estado ya tiene fecha" no alcanza para detectar un
+    duplicado sin generar falsos positivos. En cambio, se lleva la lista de
+    eventId ya aplicados: si el mismo eventId llega de nuevo (reentrega real
+    del evento), se ignora; un evento distinto que revisita el mismo estado
+    se sigue aplicando con normalidad."""
     reclamo_id = data.get("reclamoId")
     estado_nuevo = data.get("estadoNuevo")
     fecha = _epoch_ms_a_datetime(data.get("updatedAt"))
@@ -196,12 +227,22 @@ def aplicar_actualizado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
 
     idx = df.index[df["reclamoId"] == reclamo_id][0]
 
+    eventos_aplicados = df.at[idx, "eventos_actualizado_aplicados"]
+    if not isinstance(eventos_aplicados, list):
+        eventos_aplicados = []
+    if event_id is not None and event_id in eventos_aplicados:
+        logging.info(f"ReclamoActualizado duplicado (eventId {event_id}) para {reclamo_id}, se ignora.")
+        return df
+
     if _es_la_transicion_mas_reciente(df, idx, fecha):
         df.at[idx, "estado_anterior"] = data.get("estadoAnterior")
 
     fecha_actual = df.at[idx, columna_fecha]
     if pd.isna(fecha_actual) or (fecha is not None and fecha >= fecha_actual):
         df.at[idx, columna_fecha] = fecha
+
+    if event_id is not None:
+        df.at[idx, "eventos_actualizado_aplicados"] = eventos_aplicados + [event_id]
 
     _actualizar_derivados(df, idx)
     return df
@@ -263,13 +304,14 @@ def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
     """Aplica un evento de reclamos (Creado o Actualizado) al DataFrame.
     Devuelve None si el eventType no es reconocido."""
     data = evento.get("data", {})
-    event_type = evento.get("metadata", {}).get("eventType", "")
+    metadata = evento.get("metadata", {})
+    event_type = metadata.get("eventType", "")
     tipo_evento = event_type.split(".")[-1]
 
     if tipo_evento == "ReclamoCreado":
         return upsert_creado(df, data)
     if tipo_evento == "ReclamoActualizado":
-        return aplicar_actualizado(df, data)
+        return aplicar_actualizado(df, data, event_id=metadata.get("eventId"))
 
     logging.warning(f"eventType inesperado para reclamos: {event_type!r}")
     return None
