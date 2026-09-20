@@ -24,14 +24,14 @@ Por ejemplo, para `com.citypass.emergencias.AlertaEmergencia`:
 bronze/Emergencias y Seguridad/AlertaEmergencia/AlertaEmergencia_20260905_143210_8b85a007.json
 ```
 
-El 3er segmento del `eventType` (`emergencias`) se traduce a un nombre de carpeta "lindo" mediante el diccionario `DOMINIOS` en [function_app.py](function_app.py). Dominios ya mapeados:
+El 3er segmento del `eventType` (`emergencias`) se traduce a un nombre de carpeta "lindo" mediante el diccionario `DOMINIOS` en [bp_data_ingestion_bronze.py](bp_data_ingestion_bronze.py). Dominios ya mapeados:
 
 | Clave (`eventType`) | Carpeta |
 |---|---|
 | `emergencias` | Emergencias y Seguridad |
 | `reclamos` | Reclamos |
 | `espacios` | Espacios Publicos y Cultura |
-| `residuos` | Gestion de residuos inteligente |
+| `residuos` | Gestion de Residuos Inteligente |
 | `movilidad` | Movilidad Urbana |
 
 Si el dominio no está en el diccionario, se usa la clave cruda como nombre de carpeta. Si el evento no trae un `eventType` con el formato esperado, se guarda en `Otros/`.

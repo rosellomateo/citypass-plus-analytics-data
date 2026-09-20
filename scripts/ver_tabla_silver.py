@@ -7,6 +7,7 @@ Uso desde terminal:
     python scripts/ver_tabla_silver.py movilidad
     python scripts/ver_tabla_silver.py reclamos --id test-reclamo-001
     python scripts/ver_tabla_silver.py movilidad --id viaje-test-001 --rows 5
+    python scripts/ver_tabla_silver.py residuos --id alerta-test-001
     python scripts/ver_tabla_silver.py --container silver --path "OtraTabla/otra.parquet"
 
 Uso desde el editor (boton "Run", sin terminal):
@@ -27,6 +28,9 @@ CONTAINER = "silver"
 TABLAS = {
     "reclamos": {"path": "Reclamos/reclamos.parquet", "columna_id": "reclamoId"},
     "movilidad": {"path": "Movilidad Urbana/viajes.parquet", "columna_id": "viajeId"},
+    "residuos": {"path": "Gestion de Residuos Inteligente/alertas.parquet", "columna_id": "alertaId"},
+    "espacios": {"path": "Espacios Publicos y Cultura/reservas.parquet", "columna_id": "reservaId"},
+    "emergencias": {"path": "Emergencias y Seguridad/emergencias.parquet", "columna_id": "emergenciaId"},
 }
 
 
@@ -81,4 +85,4 @@ if __name__ == "__main__":
         main()
     else:
         # Se corrio desde el editor sin argumentos: editar estos valores a mano.
-        mostrar_tabla(dominio="movilidad")
+        mostrar_tabla(dominio="emergencias")

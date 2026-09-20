@@ -17,7 +17,7 @@ DOMINIOS = {
     "emergencias": "Emergencias y Seguridad",
     "reclamos": "Reclamos",
     "espacios": "Espacios Publicos y Cultura",
-    "residuos": "Gestion de residuos inteligente",
+    "residuos": "Gestion de Residuos Inteligente",
     "movilidad": "Movilidad Urbana"
 }
 
