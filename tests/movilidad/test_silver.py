@@ -79,3 +79,32 @@ def test_viajeterminado_que_llega_antes_crea_fila_placeholder_y_se_completa_desp
     fila = df.iloc[0]
     assert fila["en_curso"] == False  # noqa: E712
     assert fila["duracion_minutos"] == 25.0
+
+
+def test_viajeiniciado_duplicado_no_pisa_datos():
+    df = dataframe_vacio()
+    inicio_real = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = aplicar_evento(df, _evento_iniciado("V-004", inicio_real))
+
+    # Reentrega del ViajeIniciado (ej. reintento de red) con otra hora --
+    # como el viaje ya tiene horaInicio, se debe ignorar.
+    df = aplicar_evento(df, _evento_iniciado("V-004", datetime(2026, 9, 1, 9, 30, tzinfo=timezone.utc)))
+
+    fila = df[df["viajeId"] == "V-004"].iloc[0]
+    assert fila["horaInicio"] == pd.Timestamp(inicio_real)
+
+
+def test_viajeterminado_duplicado_no_pisa_datos():
+    df = dataframe_vacio()
+    inicio = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    fin_real = datetime(2026, 9, 1, 8, 25, tzinfo=timezone.utc)
+    df = aplicar_evento(df, _evento_iniciado("V-005", inicio))
+    df = aplicar_evento(df, _evento_terminado("V-005", fin_real))
+
+    # Reentrega del ViajeTerminado con otra hora -- el viaje ya tiene
+    # horaFinalizacion, se debe ignorar.
+    df = aplicar_evento(df, _evento_terminado("V-005", datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)))
+
+    fila = df[df["viajeId"] == "V-005"].iloc[0]
+    assert fila["horaFinalizacion"] == pd.Timestamp(fin_real)
+    assert fila["duracion_minutos"] == 25.0

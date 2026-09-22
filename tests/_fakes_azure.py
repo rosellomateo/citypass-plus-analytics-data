@@ -100,6 +100,18 @@ class ContenedorGoldFalso:
         return self._blobs[nombre_blob]
 
 
+class ContenedorBronzeEscribibleFalso:
+    """Para probar ingesta_eventos: el contenedor 'bronze' en modo escritura
+    (a diferencia de ContenedorBronzeFalso, que es de solo lectura para los
+    triggers de silver). Guarda cada upload_blob en `subidas`."""
+
+    def __init__(self):
+        self.subidas = []  # lista de (nombre, contenido)
+
+    def upload_blob(self, name, data, overwrite=False):
+        self.subidas.append((name, data))
+
+
 def blob_service_client_falso(**contenedores):
     """El codigo real hace BlobServiceClient.from_connection_string(...).get_container_client(nombre).
     Esto arma el objeto falso que responde eso. Uso: blob_service_client_falso(bronze=..., silver=...)."""

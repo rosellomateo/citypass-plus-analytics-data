@@ -3,6 +3,8 @@
 por reserva -- una segunda transicion se ignora."""
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from espacios.bp_espacios_silver import aplicar_evento, dataframe_vacio
 
 
@@ -80,3 +82,16 @@ def test_reserva_actualizada_antes_que_creada_no_pisa_el_estado_con_pendiente():
     # ReservaCreada "normalmente" pondria PENDIENTE, pero como ya habia un
     # estado_actual cargado, no lo pisa.
     assert fila["estado_actual"] == "CONFIRMADA"
+
+
+def test_reservacreada_duplicada_no_pisa_datos():
+    df = dataframe_vacio()
+    creado_real = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    df = aplicar_evento(df, _evento_reserva_creada("RES-004", creado_real))
+
+    # Reentrega de la ReservaCreada (otra fecha) -- ya tiene fechaCreada
+    # cargada, se debe ignorar.
+    df = aplicar_evento(df, _evento_reserva_creada("RES-004", datetime(2026, 9, 2, tzinfo=timezone.utc)))
+
+    fila = df[df["reservaId"] == "RES-004"].iloc[0]
+    assert fila["fechaCreada"] == pd.Timestamp(creado_real)
