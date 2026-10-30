@@ -8,7 +8,7 @@ despues del test.
 """
 from unittest.mock import MagicMock
 
-from azure.core.exceptions import ResourceNotFoundError
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 
 
 class BlobFalso:
@@ -109,6 +109,9 @@ class ContenedorBronzeEscribibleFalso:
         self.subidas = []  # lista de (nombre, contenido)
 
     def upload_blob(self, name, data, overwrite=False):
+        # Igual que Azure: subir un nombre que ya existe sin overwrite falla.
+        if not overwrite and any(nombre == name for nombre, _ in self.subidas):
+            raise ResourceExistsError("el blob ya existe")
         self.subidas.append((name, data))
 
 

@@ -22,6 +22,14 @@ def test_dominio_desconocido_pero_bien_formado_no_se_pierde():
     assert tipo == "AlgoNuevo"
 
 
+def test_version_mayor_del_topico_no_se_toma_como_tipo_de_evento():
+    # Un cambio incompatible de schema crea el tópico ...BiciDevuelta.v2.
+    carpeta, tipo = resolver_carpeta_y_tipo("com.citypass.movilidad.ViajeIniciado.v2")
+
+    assert carpeta == "Movilidad Urbana/ViajeIniciado"
+    assert tipo == "ViajeIniciado"
+
+
 def test_evento_type_mal_formado_cae_en_otros():
     # Le faltan partes (deberia tener 4 segmentos separados por punto).
     carpeta, tipo = resolver_carpeta_y_tipo("evento_mal_formado")

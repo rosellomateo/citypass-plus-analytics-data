@@ -2,3 +2,4 @@ azure-functions
 azure-storage-blob
 pandas
 pyarrow
+confluent-kafka[avro]>=2.6
