@@ -30,7 +30,6 @@ from azure.storage.blob import BlobServiceClient
 from confluent_kafka import Consumer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
-from confluent_kafka.serialization import MessageField, SerializationContext
 
 from bronze.bp_data_ingestion_bronze import CONTAINER_NAME, guardar_evento_en_bronze
 
@@ -56,6 +55,10 @@ TOPICOS_DEFAULT = [
     "com.citypass.residuos.Crear_Evento",
     "com.citypass.residuos.CriticidadClimaticaConfirmada",
     "com.citypass.turismo.CreacionEvento",
+    # Grupo 2 (Login Federado) -- ver Eventos-login.md.
+    "com.citypass.auth.LoginExitoso",
+    "com.citypass.auth.TokenRenovado",
+    "com.citypass.auth.SesionCerrada",
 ]
 
 NAMESPACE = "com.citypass.analitica"
@@ -160,7 +163,12 @@ def consumir_lote(consumer, deserializar, container_client, reloj=time.monotonic
             continue
 
         try:
-            evento = deserializar(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
+            # Sin SerializationContext: con uno, el AvroDeserializer (>=2.x) resuelve
+            # primero un "subject" vía /dek-registry (asociaciones de Data Contracts),
+            # algo que este gateway no implementa y devuelve 401 -- aunque el schema id
+            # embebido en el mensaje sea perfectamente resoluble. El propio README del
+            # bus (Grupo 1, sección 6) deserializa con `None`, igual que acá.
+            evento = deserializar(msg.value(), None)
         except Exception as e:
             nombre = _guardar_no_deserializable(container_client, msg)
             logging.error(f"No se pudo deserializar {msg.topic()}[{msg.partition()}]@{msg.offset()}: {e}. Guardado en {nombre}")

@@ -20,7 +20,8 @@ DOMINIOS = {
     "reclamos": "Reclamos",
     "espacios": "Espacios Publicos y Cultura",
     "residuos": "Gestion de Residuos Inteligente",
-    "movilidad": "Movilidad Urbana"
+    "movilidad": "Movilidad Urbana",
+    "auth": "Autenticacion"
 }
 
 CARPETA_DEFAULT = "Otros"
