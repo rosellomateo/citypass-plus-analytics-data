@@ -13,6 +13,7 @@ import azure.functions as func
 import logging
 import json
 import os
+import re
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -60,7 +61,16 @@ COLUMNAS_BASE = [
     "barrio",
     "latitud",
     "longitud",
+    "objetoAfectado",
+    "alertaId",
+    "afectaCirculacion",
     "correlationId",
+    # Agregados con el esquema v2 de ReclamoCreado (9/nov): patron causaId/
+    # causaTipo de MODELADO_EVENTOS_PARTE2.md, mas actividadId (que viaja
+    # aparte para que la alerta climatica no tape la actividad masiva).
+    "causaId",
+    "causaTipo",
+    "actividadId",
 ]
 
 COLUMNAS = [
@@ -300,13 +310,26 @@ def escribir_tabla(blob_client, df: pd.DataFrame) -> None:
 
 # --- Dispatcher: aplica el evento correcto segun su eventType -------------
 
+def _tipo_evento(event_type: str) -> str:
+    """Ultimo segmento del eventType, sacando el sufijo de version si lo
+    tiene (com.citypass.reclamos.ReclamoCreado.v2 -> ReclamoCreado). El
+    gateway abre un topico nuevo con ese sufijo cuando un cambio de schema
+    rompe compatibilidad (mismo criterio que resolver_carpeta_y_tipo en
+    bronze/bp_data_ingestion_bronze.py) -- el nombre del evento de negocio
+    no cambia, solo el topico de Kafka por debajo."""
+    partes = event_type.split(".")
+    if len(partes) > 1 and re.fullmatch(r"v\d+", partes[-1]):
+        partes = partes[:-1]
+    return partes[-1] if partes else ""
+
+
 def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
     """Aplica un evento de reclamos (Creado o Actualizado) al DataFrame.
     Devuelve None si el eventType no es reconocido."""
     data = evento.get("data", {})
     metadata = evento.get("metadata", {})
     event_type = metadata.get("eventType", "")
-    tipo_evento = event_type.split(".")[-1]
+    tipo_evento = _tipo_evento(event_type)
 
     if tipo_evento == "ReclamoCreado":
         return upsert_creado(df, data)

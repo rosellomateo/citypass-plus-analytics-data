@@ -23,12 +23,12 @@ def _tabla_silver_de_prueba() -> bytes:
         {
             "reclamoId": "R-001", "barrio": "Flores", "categoria": "BACHES",
             "prioridad": "MEDIA", "origenClasificacion": "CIUDADANO", "estado_actual": "CERRADO",
-            "fecha_creado": creado, "fecha_cerrado": creado + timedelta(hours=10),
+            "causaTipo": None, "fecha_creado": creado, "fecha_cerrado": creado + timedelta(hours=10),
         },
         {
             "reclamoId": "R-002", "barrio": "Flores", "categoria": "BACHES",
             "prioridad": "MEDIA", "origenClasificacion": "CIUDADANO", "estado_actual": "CERRADO",
-            "fecha_creado": creado, "fecha_cerrado": creado + timedelta(hours=30),
+            "causaTipo": None, "fecha_creado": creado, "fecha_cerrado": creado + timedelta(hours=30),
         },
     ]
     df = pd.DataFrame(filas)

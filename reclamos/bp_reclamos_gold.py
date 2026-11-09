@@ -2,7 +2,8 @@
 
 Timer trigger diario que agrega la tabla completa de silver/Reclamos/
 reclamos.parquet por barrio/categoria/prioridad/origenClasificacion/
-estado_actual, y guarda el resultado en gold/Reclamos/reclamos_resumen.parquet.
+estado_actual/causaTipo, y guarda el resultado en
+gold/Reclamos/reclamos_resumen.parquet.
 
 A diferencia de silver, aca no hay incremental/checkpoint: como es una
 agregacion (GROUP BY), cada corrida la recalcula entera a partir de la tabla
@@ -27,7 +28,7 @@ bp = func.Blueprint()
 GOLD_CONTAINER_NAME = "gold"
 TABLA_RECLAMOS_GOLD_BLOB = "Reclamos/reclamos_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["barrio", "categoria", "prioridad", "origenClasificacion", "estado_actual"]
+COLUMNAS_GRANULARIDAD = ["barrio", "categoria", "prioridad", "origenClasificacion", "estado_actual", "causaTipo"]
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
