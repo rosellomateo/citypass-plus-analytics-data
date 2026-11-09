@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "ReclamoActualizado",
+  "namespace": "com.citypass.reclamos",
+  "doc": "Cambio de estado de un reclamo. La resolucion viaja aca con estadoNuevo igual a RESUELTO: no hay un evento aparte.",
+  "fields": [
+    { "name": "reclamoId", "type": "string" },
+    { "name": "ciudadanoId", "type": "string", "doc": "UUID emitido por Reclamos, no resoluble contra el IdP del Grupo 2." },
+    { "name": "estadoAnterior", "type": "string", "doc": "RECIBIDO, EN_REVISION, ASIGNADO, EN_PROCESO, RESUELTO, RECHAZADO o CERRADO." },
+    { "name": "estadoNuevo", "type": "string" },
+    { "name": "motivo", "type": ["null", "string"], "default": null },
+    { "name": "asignadoA", "type": ["null", "string"], "default": null, "doc": "Area o cuadrilla responsable. Texto libre, no necesariamente un usuario." },
+    { "name": "cambiadoPor", "type": "string", "doc": "Claim sub del token del Grupo 2 para el personal municipal, o 'sistema' si lo disparo un evento." },
+    { "name": "alertaId", "type": ["null", "string"], "default": null, "doc": "Alerta climatica que marco el reclamo, o null si no cae en ninguna." },
+    { "name": "correlationId", "type": ["null", "string"], "default": null },
+    { "name": "updatedAt", "type": "long", "doc": "Milisegundos desde epoch." }
+  ]
+}

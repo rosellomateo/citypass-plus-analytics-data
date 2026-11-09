@@ -47,6 +47,13 @@ TOPICOS_DEFAULT = [
     # Los que están registrados en el bus de test (GET /api/v1/event-types).
     # Ojo: no son los que habíamos supuesto en EVENTOS_POR_GRUPO.md.
     "com.citypass.reclamos.ReclamoCreado",
+    # Rompio compatibilidad al agregar causaId/causaTipo/geolocalizacion (9/nov):
+    # el gateway abrio un topico nuevo con sufijo .v2 y dejo el de arriba sirviendo
+    # su historial viejo. Hay que seguir escuchando los dos: el viejo por si quedan
+    # eventos sin leer, el nuevo porque ahi es donde va a publicar Reclamos de aca
+    # en adelante.
+    "com.citypass.reclamos.ReclamoCreado.v2",
+    "com.citypass.reclamos.ReclamoActualizado",
     "com.citypass.reclamos.ReclamoResuelto",
     "com.citypass.reclamos.ReclamoPostEventoClimatico",
     "com.citypass.emergencias.EmergenciaReportada",

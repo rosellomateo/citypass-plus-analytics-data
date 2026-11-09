@@ -1,0 +1,29 @@
+{
+  "type": "record",
+  "name": "ReclamoCreado",
+  "namespace": "com.citypass.reclamos",
+  "doc": "Un vecino, o un evento de otro modulo, registro un reclamo. Las fechas van en milisegundos desde epoch.",
+  "fields": [
+    { "name": "reclamoId", "type": "string", "doc": "UUID del reclamo. Es la clave para correlacionar todos sus eventos." },
+    { "name": "ciudadanoId", "type": "string", "doc": "UUID emitido por Reclamos. NO se resuelve contra el directorio del Grupo 2: su IdP autentica solo personal municipal." },
+    { "name": "canal", "type": "string", "doc": "APP, WEB, TELEFONO, PRESENCIAL o EVENTO." },
+    { "name": "titulo", "type": "string" },
+    { "name": "descripcion", "type": "string" },
+    { "name": "categoria", "type": "string", "doc": "ALUMBRADO, BACHES, RESIDUOS, ARBOLADO, AGUA_CLOACAS, TRANSITO, RUIDOS, ESPACIOS_PUBLICOS, SEGURIDAD u OTROS. String y no enum a proposito: agregar una categoria no tiene que romper el contrato." },
+    { "name": "prioridad", "type": "string", "doc": "BAJA, MEDIA, ALTA o CRITICA." },
+    { "name": "origenClasificacion", "type": "string", "doc": "Quien decidio la categoria: CIUDADANO, MODELO u OPERADOR." },
+    { "name": "confianzaClasificacion", "type": ["null", "double"], "default": null, "doc": "Confianza del clasificador entre 0 y 1. Nulo cuando la categoria no la decidio el modelo." },
+    { "name": "direccion", "type": ["null", "string"], "default": null },
+    { "name": "barrio", "type": ["null", "string"], "default": null },
+    { "name": "latitud", "type": ["null", "double"], "default": null },
+    { "name": "longitud", "type": ["null", "double"], "default": null },
+    { "name": "objetoAfectado", "type": ["null", "string"], "default": null, "doc": "Espacio urbano afectado: CICLOVIA, CALZADA, VEREDA, SENDA_PEATONAL, PLAZA_PARQUE, MOBILIARIO_URBANO, EDIFICIO_PUBLICO u OTRO. Lo elige el vecino al dar de alta, no lo infiere el clasificador, asi que viaja nulo cuando no lo completo." },
+    { "name": "alertaId", "type": ["null", "string"], "default": null, "doc": "Alerta climatica que marco el reclamo, o null si no cae en ninguna." },
+    { "name": "afectaCirculacion", "type": "boolean", "doc": "Verdadero para TRANSITO, BACHES y ARBOLADO. Viaja calculado para que cada consumidor no reimplemente la regla." },
+    { "name": "correlationId", "type": ["null", "string"], "default": null, "doc": "Permite seguir una misma interaccion a traves de varios modulos." },
+    { "name": "createdAt", "type": "long", "doc": "Milisegundos desde epoch." },
+    { "name": "causaId", "type": ["null", "string"], "default": null, "doc": "Id de la entidad que origino el reclamo, del modulo que la publico. Null si no hay causa externa." },
+    { "name": "causaTipo", "type": ["null", "string"], "default": null, "doc": "A que entidad pertenece causaId: EVENTO_CLIMATICO, INCIDENTE_VIAL, EVENTO_PUBLICO o RESERVA. Null si y solo si causaId es null. Un reclamo tiene una sola causa: si cae en una alerta climatica y cerca de una actividad masiva, gana la alerta." },
+    { "name": "actividadId", "type": ["null", "string"], "default": null, "doc": "actividadId de Espacios (ActividadCreada) de la actividad masiva con la que quedo relacionado el reclamo, o null. Viaja aparte de la causa para que la alerta climatica no la tape." }
+  ]
+}
