@@ -21,7 +21,7 @@ DOMINIOS = {
     "espacios": "Espacios Publicos y Cultura",
     "residuos": "Gestion de Residuos Inteligente",
     "movilidad": "Movilidad Urbana",
-    "auth": "Autenticacion"
+    "auth": "LDAP"
 }
 
 CARPETA_DEFAULT = "Otros"

@@ -56,13 +56,17 @@ TOPICOS_DEFAULT = [
     "com.citypass.reclamos.ReclamoActualizado",
     "com.citypass.reclamos.ReclamoResuelto",
     "com.citypass.reclamos.ReclamoPostEventoClimatico",
-    "com.citypass.emergencias.EmergenciaReportada",
+    # EmergenciaReportada (el que escuchabamos antes) era un evento viejo con
+    # otra forma (tipo/prioridad/descripcion/direccion); el ciclo de estados
+    # que arma bp_emergencias_silver.py corresponde a estos dos:
+    "com.citypass.emergencias.EmergenciaCreada",
+    "com.citypass.emergencias.EmergenciaActualizada",
     "com.citypass.movilidad.EmergenciaBicicleta",
     "com.citypass.movilidad.ReporteBicicleta",
     "com.citypass.residuos.Crear_Evento",
     "com.citypass.residuos.CriticidadClimaticaConfirmada",
     "com.citypass.turismo.CreacionEvento",
-    # Grupo 2 (Login Federado) -- ver Eventos-login.md.
+    # Grupo 9 (LDAP / Login Federado) -- ver Eventos-login.md.
     "com.citypass.auth.LoginExitoso",
     "com.citypass.auth.TokenRenovado",
     "com.citypass.auth.SesionCerrada",

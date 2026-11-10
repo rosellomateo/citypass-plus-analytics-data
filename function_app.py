@@ -12,6 +12,8 @@ from espacios.bp_espacios_silver import bp as bp_espacios_silver
 from espacios.bp_espacios_gold import bp as bp_espacios_gold
 from emergencias.bp_emergencias_silver import bp as bp_emergencias_silver
 from emergencias.bp_emergencias_gold import bp as bp_emergencias_gold
+from autenticacion.bp_autenticacion_silver import bp as bp_autenticacion_silver
+from autenticacion.bp_autenticacion_gold import bp as bp_autenticacion_gold
 
 app = func.FunctionApp()
 app.register_functions(bp_data_ingestion_bronze)
@@ -26,3 +28,5 @@ app.register_functions(bp_espacios_silver)
 app.register_functions(bp_espacios_gold)
 app.register_functions(bp_emergencias_silver)
 app.register_functions(bp_emergencias_gold)
+app.register_functions(bp_autenticacion_silver)
+app.register_functions(bp_autenticacion_gold)

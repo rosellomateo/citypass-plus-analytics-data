@@ -20,6 +20,7 @@ def _tabla_silver_de_prueba() -> bytes:
     creada = datetime(2026, 9, 1, tzinfo=timezone.utc)
     filas = [{
         "emergenciaId": "E-001", "estado_actual": "DESPACHADA", "prioridad": "ALTA",
+        "categoria": "INCENDIO", "causaTipo": None, "afectaCirculacion": False, "prioridadOriginal": None,
         "fecha_creada": creada, "fecha_despachada": creada + timedelta(minutes=15), "fecha_en_lugar": pd.NaT,
     }]
     df = pd.DataFrame(filas)

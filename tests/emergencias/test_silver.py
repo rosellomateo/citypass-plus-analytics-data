@@ -10,13 +10,20 @@ import pandas as pd
 from emergencias.bp_emergencias_silver import aplicar_evento, dataframe_vacio
 
 
-def _evento_creada(emergencia_id: str, creado_en: datetime) -> dict:
+def _evento_creada(
+    emergencia_id: str, creado_en: datetime,
+    causa_id: str | None = None, causa_tipo: str | None = None,
+    latitud: float | None = None, longitud: float | None = None,
+) -> dict:
     return {
         "metadata": {"eventType": "com.citypass.emergencias.EmergenciaCreada"},
         "data": {
             "emergenciaId": emergencia_id,
             "prioridad": "MEDIA",
             "createdAt": creado_en.isoformat(),
+            "causaId": causa_id,
+            "causaTipo": causa_tipo,
+            "ubicacion": {"latitud": latitud, "longitud": longitud},
         },
     }
 
@@ -78,3 +85,72 @@ def test_resuelta_usa_resueltoat_en_vez_de_updatedat_cuando_viene():
 
     fila = df[df["emergenciaId"] == "E-003"].iloc[0]
     assert fila["fecha_resuelta"] == pd.Timestamp(fecha_resuelto)
+
+
+def test_emergencia_creada_con_causa_carga_causaid_y_causatipo():
+    df = dataframe_vacio()
+    df = aplicar_evento(
+        df,
+        _evento_creada(
+            "E-004", datetime(2026, 9, 1, tzinfo=timezone.utc),
+            causa_id="EVT-001", causa_tipo="EVENTO_PUBLICO",
+        ),
+    )
+
+    fila = df[df["emergenciaId"] == "E-004"].iloc[0]
+    assert fila["causaId"] == "EVT-001"
+    assert fila["causaTipo"] == "EVENTO_PUBLICO"
+
+
+def test_emergencia_creada_organica_queda_con_causa_nula():
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_creada("E-005", datetime(2026, 9, 1, tzinfo=timezone.utc)))
+
+    fila = df[df["emergenciaId"] == "E-005"].iloc[0]
+    assert pd.isna(fila["causaId"])
+    assert pd.isna(fila["causaTipo"])
+
+
+def test_emergencia_creada_toma_latitud_longitud_de_ubicacion_anidada():
+    df = dataframe_vacio()
+    df = aplicar_evento(
+        df,
+        _evento_creada(
+            "E-006", datetime(2026, 9, 1, tzinfo=timezone.utc),
+            latitud=-34.6, longitud=-58.4,
+        ),
+    )
+
+    fila = df[df["emergenciaId"] == "E-006"].iloc[0]
+    assert fila["latitud"] == -34.6
+    assert fila["longitud"] == -58.4
+
+
+def test_emergencia_creada_con_latitud_no_numerica_queda_nula():
+    df = dataframe_vacio()
+    df = aplicar_evento(
+        df,
+        _evento_creada(
+            "E-007", datetime(2026, 9, 1, tzinfo=timezone.utc),
+            latitud="RUxDAStE...no-es-un-numero", longitud=None,
+        ),
+    )
+
+    fila = df[df["emergenciaId"] == "E-007"].iloc[0]
+    assert pd.isna(fila["latitud"])
+    assert pd.isna(fila["longitud"])
+
+
+def test_emergencia_cancelada_marca_columna_cancelada_y_estado_actual():
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_creada("E-008", datetime(2026, 9, 1, tzinfo=timezone.utc)))
+
+    df = aplicar_evento(
+        df,
+        _evento_actualizada("E-008", "PENDIENTE", "CANCELADA", datetime(2026, 9, 1, 1, 0, tzinfo=timezone.utc)),
+    )
+
+    fila = df[df["emergenciaId"] == "E-008"].iloc[0]
+    assert fila["cancelada"] == True
+    assert fila["descartada"] == False
+    assert fila["estado_actual"] == "CANCELADA"

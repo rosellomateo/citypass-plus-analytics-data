@@ -4,21 +4,27 @@ Timer trigger diario que agrega la tabla completa de silver/Emergencias y
 Seguridad/emergencias.parquet, y guarda el resultado en gold/Emergencias y
 Seguridad/emergencias_resumen.parquet.
 
-Una sola tabla, grano [estado_actual, prioridad], pensada para responder 3
-preguntas de negocio:
-  1. Cantidad de emergencias en cada fase del protocolo -> sumar
-     cantidadEmergencias agrupando por estado_actual.
-  2. Proporcion de emergencias segun gravedad -> sumar cantidadEmergencias
-     agrupando por prioridad (dividir por el total para el %).
-  3. Rapidez de respuesta segun nivel de urgencia -> tiempoPromRespuesta
-     Despacho/Lugar, en minutos desde fecha_creada.
+Grano [estado_actual, prioridad, categoria, causaTipo, afectaCirculacion],
+pensada para responder las preguntas de negocio del CONTRATO_EMERGENCIAS
+(seccion 5, "Metricas que salen con esto"):
+  1. Criticidad afectada por evento climatico -> filtrar causaTipo =
+     EVENTO_CLIMATICO; cantidadEmergencias vs criticidadAfectada (cuantas
+     tienen prioridad != prioridadOriginal).
+  2. Emergencias a causa de un reclamo -> filtrar causaTipo = RECLAMO.
+  3. Servicios enviados preventivamente -> filtrar categoria = PREVENTIVA.
+  4. Emergencias por incidentes de transito -> filtrar afectaCirculacion.
+  5. Emergencias por incidente vial -> filtrar causaTipo = INCIDENTE_VIAL.
+  6. Emergencias por evento ciudadano -> filtrar causaTipo = RESERVA.
+Mas las 3 preguntas originales: cantidad por fase (estado_actual), por
+gravedad (prioridad), y rapidez de respuesta (tiempoPromRespuesta
+Despacho/Lugar, en minutos desde fecha_creada).
 
-El pedido 3 es "por prioridad", sin filtrar por fase — si tiempoPromRespuesta
-se calculara dentro de cada combinacion [estado_actual, prioridad], quedaria
+tiempoPromRespuesta es "por prioridad", sin filtrar por el resto de la
+granularidad — si se calculara dentro de cada combinacion completa, quedaria
 diluido (ej. el promedio de las ALTA que hoy estan en CERRADA, no el de
 todas las ALTA). Por eso se calcula aparte, una vez por prioridad, y se
 repite en todas las filas de esa prioridad — asi cada fila sigue sirviendo
-para los 3 pedidos sin que ninguno quede aproximado.
+para esos pedidos sin que ninguno quede aproximado.
 
 Al igual que en el resto de las tablas gold, aca no hay incremental/
 checkpoint: cada corrida recalcula el resumen entero a partir de la tabla
@@ -43,7 +49,7 @@ bp = func.Blueprint()
 GOLD_CONTAINER_NAME = "gold"
 TABLA_EMERGENCIAS_GOLD_BLOB = "Emergencias y Seguridad/emergencias_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["estado_actual", "prioridad"]
+COLUMNAS_GRANULARIDAD = ["estado_actual", "prioridad", "categoria", "causaTipo", "afectaCirculacion"]
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
@@ -75,10 +81,17 @@ def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = 
     df = df_silver.copy()
     df["_min_hasta_despachada"] = (df["fecha_despachada"] - df["fecha_creada"]).dt.total_seconds() / 60
     df["_min_hasta_en_lugar"] = (df["fecha_en_lugar"] - df["fecha_creada"]).dt.total_seconds() / 60
+    # Caso 1 (criticidad afectada por clima): prioridadOriginal solo viene
+    # completo cuando causaTipo = EVENTO_CLIMATICO, asi que comparar no suma
+    # falsos positivos en el resto de las emergencias (prioridadOriginal null).
+    df["_criticidad_afectada"] = df["prioridadOriginal"].notna() & (df["prioridad"] != df["prioridadOriginal"])
 
     conteo = (
         df.groupby(COLUMNAS_GRANULARIDAD, dropna=False)
-        .agg(cantidadEmergencias=("emergenciaId", "count"))
+        .agg(
+            cantidadEmergencias=("emergenciaId", "count"),
+            criticidadAfectada=("_criticidad_afectada", "sum"),
+        )
         .reset_index()
     )
 

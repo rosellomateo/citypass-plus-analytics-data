@@ -4,8 +4,8 @@ Timer trigger diario que lee los eventos crudos de bronze/Emergencias y
 Seguridad/ (EmergenciaCreada y EmergenciaActualizada) y arma una tabla en
 silver/Emergencias y Seguridad/emergencias.parquet: una fila por emergencia,
 con el historial de fechas por estado del ciclo PENDIENTE -> VALIDADA ->
-DESPACHADA -> EN_CAMINO -> EN_LUGAR -> RESUELTA -> CERRADA (+ rama
-DESCARTADA desde PENDIENTE/VALIDADA), igual que bp_reclamos_silver.py.
+DESPACHADA -> EN_CAMINO -> EN_LUGAR -> RESUELTA -> CERRADA (+ ramas
+DESCARTADA/CANCELADA desde PENDIENTE/VALIDADA), igual que bp_reclamos_silver.py.
 
 Diferencias con reclamos:
   - Cada EmergenciaActualizada tambien trae quien la atendio (usuarioId),
@@ -13,8 +13,8 @@ Diferencias con reclamos:
     y el resultado (resolucion) — se guardan como "ultimo valor conocido",
     actualizados solo cuando esa actualizacion es la transicion mas
     reciente de la emergencia (misma regla que estado_actual/estado_anterior).
-  - La fecha de una transicion usa resueltoAt cuando viene (solo en RESUELTA
-    o DESCARTADA), y si no updatedAt.
+  - La fecha de una transicion usa resueltoAt cuando viene (solo en RESUELTA,
+    DESCARTADA o CANCELADA), y si no updatedAt.
   - A diferencia de reclamos, aca cada evento SI valida duplicados: si la
     emergencia ya tiene fecha para ese estado puntual, se ignora el evento
     (misma logica que bp_movilidad_silver.py / bp_residuos_silver.py).
@@ -43,8 +43,8 @@ PREFIJO_EMERGENCIAS = "Emergencias y Seguridad/"
 TABLA_EMERGENCIAS_BLOB = "Emergencias y Seguridad/emergencias.parquet"
 CHECKPOINT_BLOB = "Emergencias y Seguridad/_checkpoint.json"
 
-# Ciclo de estados de una emergencia (ver README del Grupo 5). DESCARTADA es
-# una rama aparte, solo alcanzable desde PENDIENTE/VALIDADA.
+# Ciclo de estados de una emergencia (ver README del Grupo 5). DESCARTADA y
+# CANCELADA son ramas aparte, solo alcanzables desde PENDIENTE/VALIDADA.
 ESTADOS = [
     "PENDIENTE",
     "VALIDADA",
@@ -54,6 +54,7 @@ ESTADOS = [
     "RESUELTA",
     "CERRADA",
     "DESCARTADA",
+    "CANCELADA",
 ]
 
 COLUMNA_FECHA_POR_ESTADO = {estado: f"fecha_{estado.lower()}" for estado in ESTADOS}
@@ -64,13 +65,14 @@ ESTADO_POR_COLUMNA_FECHA = {columna: estado for estado, columna in COLUMNA_FECHA
 COLUMNAS_BASE = [
     "emergenciaId",
     "ciudadanoId",
-    "titulo",
-    "descripcion",
     "categoria",
-    "direccion",
     "barrio",
     "latitud",
     "longitud",
+    "afectaCirculacion",
+    "causaId",
+    "causaTipo",
+    "prioridadOriginal",
     "correlationId",
 ]
 
@@ -86,6 +88,7 @@ COLUMNAS = [
     "resolucion",
     "resuelta",
     "descartada",
+    "cancelada",
     "cerrada",
 ]
 
@@ -94,10 +97,31 @@ COLUMNAS = [
 
 def _iso_a_datetime(iso_str):
     """createdAt/updatedAt/resueltoAt vienen en ISO-8601; los pasamos a
-    Timestamp UTC (pd.to_datetime tolera con/sin offset y el sufijo 'Z')."""
+    Timestamp UTC (pd.to_datetime tolera con/sin offset y el sufijo 'Z').
+    Si el productor manda algo que no es una fecha (ej. datos de prueba
+    con valores placeholder), lo tratamos como fecha ausente en vez de
+    tirar abajo el reproceso entero."""
     if iso_str is None:
         return None
-    return pd.to_datetime(iso_str, utc=True)
+    try:
+        return pd.to_datetime(iso_str, utc=True)
+    except (ValueError, TypeError):
+        logging.warning(f"No se pudo parsear como fecha: {iso_str!r}")
+        return None
+
+
+def _coordenada(valor):
+    """latitud/longitud deberian ser double|null, pero Emergencias a veces
+    manda algo que no es un numero (visto en produccion: un string cifrado).
+    Si no se puede convertir a float, se guarda como nulo en vez de romper
+    el tipo de la columna."""
+    if valor is None:
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        logging.warning(f"latitud/longitud no numerico, se descarta: {valor!r}")
+        return None
 
 
 def dataframe_vacio() -> pd.DataFrame:
@@ -106,7 +130,7 @@ def dataframe_vacio() -> pd.DataFrame:
     df = pd.DataFrame(columns=COLUMNAS)
     for col in COLUMNA_FECHA_POR_ESTADO.values():
         df[col] = pd.to_datetime(df[col], utc=True)
-    for col in ("resuelta", "descartada", "cerrada"):
+    for col in ("resuelta", "descartada", "cancelada", "cerrada"):
         df[col] = df[col].astype(bool)
     return df
 
@@ -119,6 +143,7 @@ def _fila_nueva(emergencia_id: str) -> dict:
     fila["emergenciaId"] = emergencia_id
     fila["resuelta"] = False
     fila["descartada"] = False
+    fila["cancelada"] = False
     fila["cerrada"] = False
     return fila
 
@@ -144,6 +169,7 @@ def _actualizar_estado_actual(df: pd.DataFrame, idx) -> None:
 def _actualizar_derivados(df: pd.DataFrame, idx) -> None:
     df.at[idx, "resuelta"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["RESUELTA"]])
     df.at[idx, "descartada"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["DESCARTADA"]])
+    df.at[idx, "cancelada"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["CANCELADA"]])
     df.at[idx, "cerrada"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["CERRADA"]])
     _actualizar_estado_actual(df, idx)
 
@@ -185,6 +211,12 @@ def upsert_creada(df: pd.DataFrame, data: dict) -> pd.DataFrame:
     for col in COLUMNAS_BASE:
         if col != "emergenciaId":
             df.at[idx, col] = data.get(col)
+
+    # latitud/longitud no vienen sueltos: estan anidados en data.ubicacion
+    # (junto con un barrio redundante, igual al de arriba).
+    ubicacion = data.get("ubicacion") or {}
+    df.at[idx, "latitud"] = _coordenada(ubicacion.get("latitud"))
+    df.at[idx, "longitud"] = _coordenada(ubicacion.get("longitud"))
 
     if pd.isna(df.at[idx, "prioridad"]):
         df.at[idx, "prioridad"] = data.get("prioridad")
