@@ -1,5 +1,6 @@
-"""Nivel 3 de Gold (Movilidad): confirma lectura de Silver mockeada, el
-bucketizado de duracion, y snapshot los domingos."""
+"""Nivel 3 de Gold (Movilidad): confirma que el trigger lee las DOS tablas
+de silver (viajes + estaciones_afectadas) y escribe el resumen combinado
+por causaTipo, con snapshot los domingos."""
 from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -16,18 +17,37 @@ def _env_falso(monkeypatch):
     monkeypatch.setenv("STORAGE_CONNECTION_STRING", "conexion-de-mentira")
 
 
-def _tabla_silver_de_prueba() -> bytes:
-    inicio = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
-    filas = [{"viajeId": "V-001", "estacionInicio": "liniers-02", "horaInicio": inicio, "duracion_minutos": 20.0}]
-    df = pd.DataFrame(filas)
-    df["horaInicio"] = pd.to_datetime(df["horaInicio"], utc=True)
+def _tabla_viajes() -> bytes:
+    df = pd.DataFrame([
+        {"viajeId": "V-001", "causaTipo": "INCIDENTE_VIAL"},
+        {"viajeId": "V-002", "causaTipo": None},
+    ])
     buffer = BytesIO()
     df.to_parquet(buffer, index=False)
     return buffer.getvalue()
 
 
-def test_trigger_gold_calcula_resumen_y_guarda_snapshot_los_domingos():
-    silver = ContenedorSilverFalso(tabla_previa=_tabla_silver_de_prueba())
+def _tabla_estaciones() -> bytes:
+    momento = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    df = pd.DataFrame([
+        {
+            "afectacionId": "AF-1", "estacionId": "EST-01", "causaTipo": "EVENTO_CLIMATICO",
+            "tipoAfectacion": "BLOQUEADA", "afectacionDesde": momento, "occurredAt": momento,
+            "restaurada": True,
+        },
+    ])
+    df["afectacionDesde"] = pd.to_datetime(df["afectacionDesde"], utc=True)
+    df["occurredAt"] = pd.to_datetime(df["occurredAt"], utc=True)
+    buffer = BytesIO()
+    df.to_parquet(buffer, index=False)
+    return buffer.getvalue()
+
+
+def test_trigger_gold_combina_las_dos_tablas_y_guarda_snapshot_los_domingos():
+    silver = ContenedorSilverFalso(tablas={
+        "Movilidad Urbana/viajes.parquet": _tabla_viajes(),
+        "Movilidad Urbana/estaciones_afectadas.parquet": _tabla_estaciones(),
+    })
     gold = ContenedorGoldFalso()
     fecha_domingo = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
 
@@ -38,13 +58,24 @@ def test_trigger_gold_calcula_resumen_y_guarda_snapshot_los_domingos():
         datetime_mock.now.return_value = fecha_domingo
         gold_mod.movilidad_silver_a_gold(MagicMock())
 
-    acumulado = gold._blobs["Movilidad Urbana/viajes_resumen.parquet"]
+    acumulado = gold._blobs["Movilidad Urbana/movilidad_resumen.parquet"]
     assert len(acumulado.subidas) == 1
     df_resumen = pd.read_parquet(BytesIO(acumulado.subidas[0]))
-    assert df_resumen.iloc[0]["cantidadViajes"] == 1
-    assert df_resumen.iloc[0]["duracionViaje"] == "15-30min"
+
+    fila_clima = df_resumen[df_resumen["causaTipo"] == "EVENTO_CLIMATICO"].iloc[0]
+    assert fila_clima["cantidadBloqueadas"] == 1
+    assert fila_clima["cantidadViajesInterrumpidos"] == 0
+
+    fila_incidente = df_resumen[df_resumen["causaTipo"] == "INCIDENTE_VIAL"].iloc[0]
+    assert fila_incidente["cantidadViajesInterrumpidos"] == 1
+    assert fila_incidente["cantidadAfectaciones"] == 0
+
+    # V-002 (causaTipo=None) cae en su propia fila NORMAL.
+    fila_normal = df_resumen[df_resumen["causaTipo"] == "NORMAL"].iloc[0]
+    assert fila_normal["cantidadViajesInterrumpidos"] == 1
+    assert fila_normal["cantidadAfectaciones"] == 0
 
     anio, semana, _ = fecha_domingo.isocalendar()
-    nombre_snapshot = f"Movilidad Urbana/viajes_resumen_{semana:02d}_{anio}.parquet"
+    nombre_snapshot = f"Movilidad Urbana/movilidad_resumen_{semana:02d}_{anio}.parquet"
     assert nombre_snapshot in gold._blobs
     assert len(gold._blobs[nombre_snapshot].subidas) == 1

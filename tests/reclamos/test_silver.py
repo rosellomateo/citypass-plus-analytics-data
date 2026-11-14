@@ -15,7 +15,9 @@ def _epoch_ms(momento: datetime) -> int:
     return int(momento.timestamp() * 1000)
 
 
-def _evento_creado(reclamo_id: str, creado_en: datetime, categoria: str = "BACHES") -> dict:
+def _evento_creado(
+    reclamo_id: str, creado_en: datetime, categoria: str = "BACHES", correlation_id: str | None = None,
+) -> dict:
     return {
         "metadata": {
             "eventType": "com.citypass.reclamos.ReclamoCreado",
@@ -23,6 +25,10 @@ def _evento_creado(reclamo_id: str, creado_en: datetime, categoria: str = "BACHE
         },
         "data": {
             "reclamoId": reclamo_id,
+            # En produccion correlationId NO es el reclamoId (son valores
+            # distintos) -- acá default a reclamo_id solo para que cada
+            # test tenga un correlationId estable y distinto de los demas.
+            "correlationId": correlation_id if correlation_id is not None else reclamo_id,
             "categoria": categoria,
             "createdAt": _epoch_ms(creado_en),
         },
@@ -30,7 +36,8 @@ def _evento_creado(reclamo_id: str, creado_en: datetime, categoria: str = "BACHE
 
 
 def _evento_actualizado(
-    reclamo_id: str, estado_anterior: str, estado_nuevo: str, fecha: datetime, event_id: str
+    reclamo_id: str, estado_anterior: str, estado_nuevo: str, fecha: datetime, event_id: str,
+    correlation_id: str | None = None,
 ) -> dict:
     return {
         "metadata": {
@@ -39,6 +46,7 @@ def _evento_actualizado(
         },
         "data": {
             "reclamoId": reclamo_id,
+            "correlationId": correlation_id if correlation_id is not None else reclamo_id,
             "estadoAnterior": estado_anterior,
             "estadoNuevo": estado_nuevo,
             "updatedAt": _epoch_ms(fecha),
@@ -266,3 +274,47 @@ def test_reclamocreado_organico_queda_con_causa_nula():
     fila = df[df["reclamoId"] == "R-010"].iloc[0]
     assert pd.isna(fila["causaId"])
     assert pd.isna(fila["causaTipo"])
+
+
+def test_actualizado_se_relaciona_por_correlationid_no_por_reclamoid():
+    # correlationId en Reclamos NO es el reclamoId (son valores distintos en
+    # produccion) -- este test confirma que lo que realmente vincula los
+    # eventos es correlationId.
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_creado("R-011", datetime(2026, 11, 9, tzinfo=timezone.utc), correlation_id="CORR-X"))
+
+    evento_actualizado = _evento_actualizado(
+        "R-011", "RECIBIDO", "ASIGNADO", datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc),
+        event_id="evt-asignado", correlation_id="CORR-X",
+    )
+    df = aplicar_evento(df, evento_actualizado)
+
+    assert len(df) == 1
+    fila = df.iloc[0]
+    assert fila["correlationId"] == "CORR-X"
+    assert fila["estado_actual"] == "ASIGNADO"
+
+
+def test_dos_reclamos_con_correlationid_nulo_no_se_fusionan():
+    # Visto en produccion: un ReclamoCreado real sin correlationId. Dos de
+    # esos no deben terminar compartiendo fila solo porque ambos son None.
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_creado("R-012", datetime(2026, 11, 9, tzinfo=timezone.utc), correlation_id=None))
+    df = aplicar_evento(df, _evento_creado("R-013", datetime(2026, 11, 9, 1, 0, tzinfo=timezone.utc), correlation_id=None))
+
+    assert len(df) == 2
+    assert set(df["reclamoId"]) == {"R-012", "R-013"}
+
+
+def test_actualizado_antes_que_creado_captura_reclamoid_igual():
+    df = dataframe_vacio()
+    df = aplicar_evento(
+        df,
+        _evento_actualizado(
+            "R-014", "RECIBIDO", "ASIGNADO", datetime(2026, 11, 9, tzinfo=timezone.utc),
+            event_id="evt-asignado-r014", correlation_id="CORR-014",
+        ),
+    )
+
+    fila = df[df["correlationId"] == "CORR-014"].iloc[0]
+    assert fila["reclamoId"] == "R-014"

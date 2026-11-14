@@ -28,8 +28,9 @@ CONTAINER = "silver"
 TABLAS = {
     "reclamos": {"path": "Reclamos/reclamos.parquet", "columna_id": "reclamoId"},
     "movilidad": {"path": "Movilidad Urbana/viajes.parquet", "columna_id": "viajeId"},
+    "movilidad-estaciones": {"path": "Movilidad Urbana/estaciones_afectadas.parquet", "columna_id": "afectacionId"},
     "residuos": {"path": "Gestion de Residuos Inteligente/alertas.parquet", "columna_id": "alertaId"},
-    "espacios": {"path": "Espacios Publicos y Cultura/reservas.parquet", "columna_id": "reservaId"},
+    "espacios": {"path": "Espacios Publicos y Cultura/actividades.parquet", "columna_id": "actividadId"},
     "emergencias": {"path": "Emergencias y Seguridad/emergencias.parquet", "columna_id": "emergenciaId"},
 }
 
@@ -85,4 +86,4 @@ if __name__ == "__main__":
         main()
     else:
         # Se corrio desde el editor sin argumentos: editar estos valores a mano.
-        mostrar_tabla(dominio="emergencias")
+        mostrar_tabla(dominio="movilidad")

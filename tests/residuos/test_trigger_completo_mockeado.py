@@ -1,6 +1,6 @@
 """Nivel 3: trigger completo de Residuos (residuos_bronze_a_silver). Mismo
 patron de orquestacion -- este test confirma el cableado propio de Residuos
-(prefijo, blob de silver, dispatch a AlertaGenerada)."""
+(prefijo, blob de silver, dispatch a IntervencionProgramada)."""
 import json
 from datetime import datetime, timezone
 from io import BytesIO
@@ -18,20 +18,22 @@ def _env_falso(monkeypatch):
     monkeypatch.setenv("STORAGE_CONNECTION_STRING", "conexion-de-mentira")
 
 
-def test_trigger_procesa_una_alerta_nueva():
-    occurred_at = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+def test_trigger_procesa_una_intervencion_nueva():
+    programada_en = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
     evento = json.dumps({
-        "metadata": {"eventType": "com.citypass.residuos.AlertaGenerada"},
+        "metadata": {"eventType": "com.citypass.residuos.IntervencionProgramada"},
         "data": {
-            "alertaId": "A-900", "contenedorId": "cont-900", "tipoAlerta": "LLENO",
-            "nivelLlenado": 85, "zona": "Caballito", "prioridad": "MEDIA",
-            "occurredAt": occurred_at.isoformat(),
+            "intervencionId": "I-900", "contenedorId": "cont-900",
+            "latitud": -34.6, "longitud": -58.4,
+            "programadaEn": int(programada_en.timestamp() * 1000),
+            "occurredAt": int(programada_en.timestamp() * 1000),
+            "causaId": None, "causaTipo": None, "camionId": None,
         },
     }).encode("utf-8")
     ultima_modificacion = datetime(2026, 9, 1, 8, 1, tzinfo=timezone.utc)
 
     bronze = ContenedorBronzeFalso({
-        "Gestion de Residuos Inteligente/AlertaGenerada_20260901_080000_abc.json": (evento, ultima_modificacion),
+        "Gestion de Residuos Inteligente/IntervencionProgramada/IntervencionProgramada_20260901_080000_abc.json": (evento, ultima_modificacion),
     })
     silver = ContenedorSilverFalso()
 
@@ -44,8 +46,8 @@ def test_trigger_procesa_una_alerta_nueva():
     assert len(silver.tabla_blob.subidas) == 1
     df_resultante = pd.read_parquet(BytesIO(silver.tabla_blob.subidas[0]))
     assert len(df_resultante) == 1
-    assert df_resultante.iloc[0]["alertaId"] == "A-900"
-    assert df_resultante.iloc[0]["resuelta"] == False  # noqa: E712
+    assert df_resultante.iloc[0]["intervencionId"] == "I-900"
+    assert df_resultante.iloc[0]["estado_actual"] == "PROGRAMADA"
 
     checkpoint_guardado = json.loads(silver.checkpoint_blob.subidas[0])
     assert checkpoint_guardado["ultima_corrida"] == ultima_modificacion.isoformat()

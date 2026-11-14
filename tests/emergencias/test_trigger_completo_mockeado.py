@@ -24,7 +24,10 @@ def test_trigger_procesa_una_emergencia_nueva():
     creado_en = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
     evento = json.dumps({
         "metadata": {"eventType": "com.citypass.emergencias.EmergenciaCreada"},
-        "data": {"emergenciaId": "E-900", "prioridad": "ALTA", "createdAt": creado_en.isoformat()},
+        "data": {
+            "emergenciaId": "E-900", "correlationId": "E-900",
+            "prioridad": "ALTA", "createdAt": creado_en.isoformat(),
+        },
     }).encode("utf-8")
     ultima_modificacion = datetime(2026, 9, 1, 8, 5, tzinfo=timezone.utc)
 

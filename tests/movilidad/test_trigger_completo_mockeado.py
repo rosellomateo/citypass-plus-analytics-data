@@ -1,7 +1,7 @@
-"""Nivel 3: trigger completo de Movilidad (movilidad_bronze_a_silver).
-Mismo patron de orquestacion que Reclamos/Emergencias -- este test confirma
-el cableado propio de Movilidad (prefijo, blob de silver, dispatch al
-ViajeIniciado)."""
+"""Nivel 3: trigger completo de Movilidad (movilidad_bronze_a_silver), el
+que procesa viajes (ViajeFinalizado). El de estaciones afectadas
+(movilidad_estaciones_bronze_a_silver) solo tiene tests de nivel unitario,
+mismo criterio que Espacios/Actividades."""
 import json
 from datetime import datetime, timezone
 from io import BytesIO
@@ -19,16 +19,25 @@ def _env_falso(monkeypatch):
     monkeypatch.setenv("STORAGE_CONNECTION_STRING", "conexion-de-mentira")
 
 
-def test_trigger_procesa_un_viaje_iniciado_nuevo():
+def test_trigger_procesa_un_viaje_finalizado_nuevo():
     inicio = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    fin = datetime(2026, 9, 1, 8, 25, tzinfo=timezone.utc)
     evento = json.dumps({
-        "metadata": {"eventType": "com.citypass.movilidad.ViajeIniciado"},
-        "data": {"id": "V-900", "estacion": "liniers-02", "horaInicio": inicio.isoformat()},
+        "metadata": {"eventType": "com.citypass.movilidad.ViajeFinalizado"},
+        "data": {
+            "viajeId": "V-900", "correlationId": "viaje-V-900",
+            "estacionInicio": "EST-007", "latitudInicio": -34.6066, "longitudInicio": -58.4357,
+            "horaInicio": inicio.isoformat(),
+            "estacionFin": "EST-010", "latitudFin": -34.5622, "longitudFin": -58.4522,
+            "horaFinalizacion": fin.isoformat(),
+            "causaId": None, "causaTipo": None,
+            "createdAt": fin.isoformat(),
+        },
     }).encode("utf-8")
-    ultima_modificacion = datetime(2026, 9, 1, 8, 1, tzinfo=timezone.utc)
+    ultima_modificacion = datetime(2026, 9, 1, 8, 26, tzinfo=timezone.utc)
 
     bronze = ContenedorBronzeFalso({
-        "Movilidad Urbana/ViajeIniciado_20260901_080000_abc.json": (evento, ultima_modificacion),
+        "Movilidad Urbana/ViajeFinalizado_20260901_082500_abc.json": (evento, ultima_modificacion),
     })
     silver = ContenedorSilverFalso()
 
@@ -42,7 +51,7 @@ def test_trigger_procesa_un_viaje_iniciado_nuevo():
     df_resultante = pd.read_parquet(BytesIO(silver.tabla_blob.subidas[0]))
     assert len(df_resultante) == 1
     assert df_resultante.iloc[0]["viajeId"] == "V-900"
-    assert df_resultante.iloc[0]["en_curso"] == True  # noqa: E712 -- todavia no tiene ViajeTerminado
+    assert df_resultante.iloc[0]["duracion_minutos"] == 25.0
 
     checkpoint_guardado = json.loads(silver.checkpoint_blob.subidas[0])
     assert checkpoint_guardado["ultima_corrida"] == ultima_modificacion.isoformat()

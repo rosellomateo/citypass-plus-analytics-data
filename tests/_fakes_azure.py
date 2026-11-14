@@ -71,15 +71,31 @@ class ContenedorBronzeFalso:
 
 class ContenedorSilverFalso:
     """El contenedor 'silver': devuelve el blob de checkpoint o el de la
-    tabla, segun el nombre que se le pida."""
+    tabla, segun el nombre que se le pida.
 
-    def __init__(self, checkpoint_previo: str | None = None, tabla_previa: bytes | None = None):
+    La mayoria de los dominios tienen una sola tabla de silver: para esos,
+    `tabla_previa` alcanza y cualquier nombre no-checkpoint cae en
+    `.tabla_blob` (comportamiento historico, sin cambios). Un dominio con
+    mas de una tabla (ej. Movilidad: viajes + estaciones_afectadas) pasa
+    `tablas={nombre_del_blob: contenido_bytes}` para que cada nombre
+    resuelva a su propio blob falso."""
+
+    def __init__(
+        self, checkpoint_previo: str | None = None, tabla_previa: bytes | None = None,
+        tablas: dict[str, bytes] | None = None,
+    ):
         self.checkpoint_blob = BlobClientFalso(contenido_inicial=checkpoint_previo)
         self.tabla_blob = BlobClientFalso(contenido_inicial=tabla_previa)
+        self.tablas_por_nombre = {
+            nombre: BlobClientFalso(contenido_inicial=contenido)
+            for nombre, contenido in (tablas or {}).items()
+        }
 
     def get_blob_client(self, nombre_blob):
         if nombre_blob.endswith("_checkpoint.json"):
             return self.checkpoint_blob
+        if nombre_blob in self.tablas_por_nombre:
+            return self.tablas_por_nombre[nombre_blob]
         return self.tabla_blob
 
 

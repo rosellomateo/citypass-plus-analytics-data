@@ -1,14 +1,14 @@
-"""Capa gold de gestion de residuos inteligente.
+"""Capa gold de gestion de residuos inteligente (intervenciones, Grupo 6).
 
 Timer trigger diario que agrega la tabla completa de silver/Gestion de
-Residuos Inteligente/alertas.parquet por zona/tipoAlerta/prioridad/
-rangoNivelLlenado, y guarda el resultado en gold/Gestion de Residuos
-Inteligente/alertas_resumen.parquet.
+Residuos Inteligente/intervenciones.parquet por estado_actual/causaTipo, y
+guarda el resultado en gold/Gestion de Residuos Inteligente/
+intervenciones_resumen.parquet.
 
-Al igual que en gold de reclamos/movilidad, aca no hay incremental/checkpoint:
-cada corrida recalcula el resumen entero a partir de la tabla de silver
-actual. Los domingos, ademas de sobreescribir la tabla principal, se guarda
-una copia con la semana ISO en el nombre (snapshot historico).
+Al igual que en gold de reclamos/emergencias, aca no hay incremental/
+checkpoint: cada corrida recalcula el resumen entero a partir de la tabla de
+silver actual. Los domingos, ademas de sobreescribir la tabla principal, se
+guarda una copia con la semana ISO en el nombre (snapshot historico).
 """
 import azure.functions as func
 import logging
@@ -26,9 +26,9 @@ from .bp_residuos_silver import get_blob_client as get_silver_blob_client
 bp = func.Blueprint()
 
 GOLD_CONTAINER_NAME = "gold"
-TABLA_RESIDUOS_GOLD_BLOB = "Gestion de Residuos Inteligente/alertas_resumen.parquet"
+TABLA_RESIDUOS_GOLD_BLOB = "Gestion de Residuos Inteligente/intervenciones_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["zona", "tipoAlerta", "prioridad", "rangoNivelLlenado"]
+COLUMNAS_GRANULARIDAD = ["estado_actual", "causaTipo"]
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
@@ -50,36 +50,16 @@ def _get_gold_blob_client(nombre_blob: str = TABLA_RESIDUOS_GOLD_BLOB):
 
 # --- Agregacion --------------------------------------------------------------
 
-def _bucket_nivel_llenado(nivel):
-    """Bucketiza nivelLlenado (0-100) en franjas de 20. None (queda como
-    NaN en la tabla) para las alertas de FALLA_SENSOR, que no traen nivel."""
-    if pd.isna(nivel):
-        return None
-    if nivel < 40:
-        return "0-40"
-    if nivel < 60:
-        return "40-60"
-    if nivel < 80:
-        return "60-80"
-    return "80-100"
-
-
 def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = None) -> pd.DataFrame:
-    """Una fila por combinacion de zona/tipoAlerta/prioridad/rangoNivelLlenado,
-    con la cantidad de alertas, cuantas se resolvieron y el promedio de
-    minutos hasta la resolucion (solo sobre las resueltas: .mean() ya
-    ignora los NaN de las que siguen abiertas). fecha_snapshot marca el
-    momento en que se calculo este resumen (por defecto, hoy); se puede
+    """Una fila por combinacion de estado_actual/causaTipo, con la cantidad
+    de intervenciones y cuantas ya quedaron afectadas. fecha_snapshot marca
+    el momento en que se calculo este resumen (por defecto, hoy); se puede
     pasar explicito para reprocesos."""
-    df = df_silver.copy()
-    df["rangoNivelLlenado"] = df["nivelLlenado"].apply(_bucket_nivel_llenado)
-
     resumen = (
-        df.groupby(COLUMNAS_GRANULARIDAD, dropna=False)
+        df_silver.groupby(COLUMNAS_GRANULARIDAD, dropna=False)
         .agg(
-            cantidadAlertas=("alertaId", "count"),
-            cantidadResueltas=("resuelta", "sum"),
-            tiempoPromResolucion=("tiempo_resolucion_minutos", "mean"),
+            cantidadIntervenciones=("intervencionId", "count"),
+            cantidadAfectadas=("afectada", "sum"),
         )
         .reset_index()
     )
@@ -93,7 +73,7 @@ def nombre_snapshot_semanal(fecha: datetime) -> str:
     """Nombre del parquet de snapshot semanal (se guarda los domingos), con
     la semana ISO del año en la que cae `fecha`."""
     anio, semana, _ = fecha.isocalendar()
-    return f"Gestion de Residuos Inteligente/alertas_resumen_{semana:02d}_{anio}.parquet"
+    return f"Gestion de Residuos Inteligente/intervenciones_resumen_{semana:02d}_{anio}.parquet"
 
 
 def escribir_resumen(df_resumen: pd.DataFrame, nombre_blob: str = TABLA_RESIDUOS_GOLD_BLOB) -> None:

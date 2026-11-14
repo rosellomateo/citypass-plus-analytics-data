@@ -4,7 +4,7 @@ Uso desde terminal:
     python scripts/ver_tabla_gold.py                                          # reclamos (default)
     python scripts/ver_tabla_gold.py movilidad
     python scripts/ver_tabla_gold.py reclamos --where barrio=Caballito --where categoria=BACHES
-    python scripts/ver_tabla_gold.py movilidad --where estacionInicio=est-retiro-02
+    python scripts/ver_tabla_gold.py movilidad --where causaTipo=INCIDENTE_VIAL
     python scripts/ver_tabla_gold.py residuos --where zona=Palermo
     python scripts/ver_tabla_gold.py --path "Reclamos/reclamos_resumen_38_2026.parquet"  # snapshot semanal puntual
 
@@ -25,9 +25,9 @@ CONTAINER = "gold"
 # Agregar una entrada por cada dominio nuevo que tenga su propia tabla de gold.
 TABLAS = {
     "reclamos": {"path": "Reclamos/reclamos_resumen.parquet", "columna_orden": "row_count"},
-    "movilidad": {"path": "Movilidad Urbana/viajes_resumen.parquet", "columna_orden": "cantidadViajes"},
+    "movilidad": {"path": "Movilidad Urbana/movilidad_resumen.parquet", "columna_orden": "cantidadAfectaciones"},
     "residuos": {"path": "Gestion de Residuos Inteligente/alertas_resumen.parquet", "columna_orden": "cantidadAlertas"},
-    "espacios": {"path": "Espacios Publicos y Cultura/reservas_resumen.parquet", "columna_orden": "cantidadTotal"},
+    "espacios": {"path": "Espacios Publicos y Cultura/actividades_resumen.parquet", "columna_orden": "cantidadActividades"},
     "emergencias": {"path": "Emergencias y Seguridad/emergencias_resumen.parquet", "columna_orden": "cantidadEmergencias"},
 }
 
@@ -111,4 +111,4 @@ if __name__ == "__main__":
         main()
     else:
         # Se corrio desde el editor sin argumentos: editar estos valores a mano.
-        mostrar_tabla(dominio="reclamos")
+        mostrar_tabla(dominio="movilidad")

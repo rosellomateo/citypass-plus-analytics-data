@@ -5,6 +5,13 @@ Timer trigger diario que lee los eventos crudos de bronze/Reclamos/
 silver/Reclamos/reclamos.parquet: una fila por reclamo, con el historial de
 fechas por estado, estado_actual/estado_anterior y unos booleanos derivados.
 
+Se relaciona ReclamoCreado con sus ReclamoActualizado por correlationId, no
+por reclamoId -- a diferencia de Emergencias, en Reclamos correlationId es
+un valor distinto al reclamoId (no el mismo id "autorreferenciado"), y
+puede venir nulo. Un correlationId nulo nunca matchea una fila existente,
+para no fusionar reclamos distintos sin correlationId en una sola fila (ver
+_buscar_fila).
+
 Procesa solo lo nuevo desde la ultima corrida (ver checkpoint mas abajo), no
 relee bronze entero cada vez. Para reprocesar todo el historico (por ejemplo
 si cambia el esquema de la tabla) usar scripts/reprocesar_reclamos_silver.py.
@@ -107,17 +114,30 @@ def dataframe_vacio() -> pd.DataFrame:
     return df
 
 
-def _fila_nueva(reclamo_id: str) -> dict:
-    """Fila placeholder para un reclamoId que todavia no tiene datos (se usa
-    tanto para un ReclamoCreado nuevo como para un ReclamoActualizado que
+def _fila_nueva(correlation_id) -> dict:
+    """Fila placeholder para un correlationId que todavia no tiene datos (se
+    usa tanto para un ReclamoCreado nuevo como para un ReclamoActualizado que
     llega antes que su ReclamoCreado)."""
     fila = {col: None for col in COLUMNAS}
-    fila["reclamoId"] = reclamo_id
+    fila["correlationId"] = correlation_id
     fila["resuelto"] = False
     fila["rechazado"] = False
     fila["cerrado"] = False
     fila["eventos_actualizado_aplicados"] = []
     return fila
+
+
+def _buscar_fila(df: pd.DataFrame, correlation_id):
+    """Indice de la fila con ese correlationId, o None si no existe. A
+    diferencia de Emergencias, en Reclamos correlationId SI puede venir
+    nulo (visto en produccion) y no es el mismo valor que reclamoId -- un
+    correlationId nulo nunca matchea una fila existente, para que dos
+    reclamos distintos sin correlationId no terminen fusionados en una
+    sola fila."""
+    if correlation_id is None:
+        return None
+    coincidencias = df.index[df["correlationId"] == correlation_id]
+    return coincidencias[0] if len(coincidencias) else None
 
 
 def _actualizar_estado_actual(df: pd.DataFrame, idx) -> None:
@@ -165,41 +185,42 @@ def _es_la_transicion_mas_reciente(df: pd.DataFrame, idx, fecha) -> bool:
 
 def upsert_creado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
     """Alta o completado de la fila del reclamo a partir de un ReclamoCreado.
-    Un reclamo solo tiene un evento de creacion valido: si la fila ya tiene
-    fecha_creado cargada, cualquier ReclamoCreado adicional es una
-    reentrega (o una correccion tardia del mismo evento) y se ignora, sin
-    pisar titulo/categoria/direccion/etc. ya cargados.
+    Relaciona los eventos por correlationId, no por reclamoId (a diferencia
+    de Emergencias, aca son valores distintos; ver _buscar_fila). Un reclamo
+    solo tiene un evento de creacion valido: si la fila ya tiene fecha_creado
+    cargada, cualquier ReclamoCreado adicional es una reentrega (o una
+    correccion tardia del mismo evento) y se ignora, sin pisar
+    titulo/categoria/direccion/etc. ya cargados.
 
     El desempate usa el createdAt del propio evento (se queda con el mas
     antiguo), no el orden en que se procesan los blobs: ese orden depende
     de blob.last_modified, que puede empatar (o desempatar por nombre de
     blob, esencialmente al azar) cuando dos ReclamoCreado del mismo
-    reclamoId se suben casi al mismo tiempo.
+    correlationId se suben casi al mismo tiempo.
 
     Si ya existia una fila (por haber llegado antes un ReclamoActualizado),
     tampoco pisa las fechas de estado que ya estaban cargadas."""
-    reclamo_id = data.get("reclamoId")
+    correlation_id = data.get("correlationId")
     columna_recibido = COLUMNA_FECHA_POR_ESTADO["RECIBIDO"]
     fecha_creado = _epoch_ms_a_datetime(data.get("createdAt"))
 
-    if reclamo_id in df["reclamoId"].values:
-        idx = df.index[df["reclamoId"] == reclamo_id][0]
+    idx = _buscar_fila(df, correlation_id)
+    if idx is not None:
         fecha_creado_actual = df.at[idx, columna_recibido]
         if pd.notna(fecha_creado_actual):
             if fecha_creado is None or fecha_creado >= fecha_creado_actual:
-                logging.info(f"ReclamoCreado duplicado para {reclamo_id}, se ignora.")
+                logging.info(f"ReclamoCreado duplicado para correlationId {correlation_id}, se ignora.")
                 return df
             logging.info(
-                f"ReclamoCreado duplicado para {reclamo_id} con createdAt mas antiguo "
+                f"ReclamoCreado duplicado para correlationId {correlation_id} con createdAt mas antiguo "
                 "que el ya aplicado: reemplaza los datos base."
             )
     else:
-        df = pd.concat([df, pd.DataFrame([_fila_nueva(reclamo_id)])], ignore_index=True)
-
-    idx = df.index[df["reclamoId"] == reclamo_id][0]
+        df = pd.concat([df, pd.DataFrame([_fila_nueva(correlation_id)])], ignore_index=True)
+        idx = df.index[-1]
 
     for col in COLUMNAS_BASE:
-        if col != "reclamoId":
+        if col != "correlationId":
             df.at[idx, col] = data.get(col)
 
     if _es_la_transicion_mas_reciente(df, idx, fecha_creado):
@@ -213,8 +234,8 @@ def upsert_creado(df: pd.DataFrame, data: dict) -> pd.DataFrame:
 
 def aplicar_actualizado(df: pd.DataFrame, data: dict, event_id: str | None = None) -> pd.DataFrame:
     """Aplica un ReclamoActualizado: completa fecha_<estadoNuevo> en la fila
-    del reclamo (creando una fila placeholder si el ReclamoCreado todavia no
-    llego).
+    del reclamo (creando una fila placeholder por correlationId si el
+    ReclamoCreado todavia no llego).
 
     A diferencia de ReclamoCreado, un reclamo SI puede volver a pasar por un
     estado ya visitado (ej. EN_REVISION -> RECIBIDO esta documentado como
@@ -223,25 +244,31 @@ def aplicar_actualizado(df: pd.DataFrame, data: dict, event_id: str | None = Non
     eventId ya aplicados: si el mismo eventId llega de nuevo (reentrega real
     del evento), se ignora; un evento distinto que revisita el mismo estado
     se sigue aplicando con normalidad."""
-    reclamo_id = data.get("reclamoId")
+    correlation_id = data.get("correlationId")
     estado_nuevo = data.get("estadoNuevo")
     fecha = _epoch_ms_a_datetime(data.get("updatedAt"))
 
     columna_fecha = COLUMNA_FECHA_POR_ESTADO.get(estado_nuevo)
     if columna_fecha is None:
-        logging.warning(f"estadoNuevo desconocido '{estado_nuevo}' en reclamo {reclamo_id}")
+        logging.warning(f"estadoNuevo desconocido '{estado_nuevo}' en reclamo (correlationId {correlation_id})")
         return df
 
-    if reclamo_id not in df["reclamoId"].values:
-        df = pd.concat([df, pd.DataFrame([_fila_nueva(reclamo_id)])], ignore_index=True)
+    idx = _buscar_fila(df, correlation_id)
+    if idx is None:
+        df = pd.concat([df, pd.DataFrame([_fila_nueva(correlation_id)])], ignore_index=True)
+        idx = df.index[-1]
 
-    idx = df.index[df["reclamoId"] == reclamo_id][0]
+    # reclamoId no es la clave de la fila, pero igual lo guardamos como
+    # dato: si el ReclamoActualizado llego antes que su ReclamoCreado, es la
+    # unica forma de tenerlo hasta que este ultimo aparezca.
+    if pd.isna(df.at[idx, "reclamoId"]):
+        df.at[idx, "reclamoId"] = data.get("reclamoId")
 
     eventos_aplicados = df.at[idx, "eventos_actualizado_aplicados"]
     if not isinstance(eventos_aplicados, list):
         eventos_aplicados = []
     if event_id is not None and event_id in eventos_aplicados:
-        logging.info(f"ReclamoActualizado duplicado (eventId {event_id}) para {reclamo_id}, se ignora.")
+        logging.info(f"ReclamoActualizado duplicado (eventId {event_id}) para correlationId {correlation_id}, se ignora.")
         return df
 
     if _es_la_transicion_mas_reciente(df, idx, fecha):

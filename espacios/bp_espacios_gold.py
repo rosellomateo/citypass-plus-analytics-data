@@ -1,22 +1,34 @@
 """Capa gold de espacios publicos y cultura.
 
 Timer trigger diario que agrega la tabla completa de silver/Espacios
-Publicos y Cultura/reservas.parquet por recursoId (un espacio fisico o un
-evento comunitario, segun tipoReserva), y guarda el resultado en
-gold/Espacios Publicos y Cultura/reservas_resumen.parquet.
+Publicos y Cultura/actividades.parquet por estado_actual/categoria/
+causaTipo/organizadorTipo/barrio, y guarda el resultado en
+gold/Espacios Publicos y Cultura/actividades_resumen.parquet.
 
-Una sola tabla, grano recursoId, pensada para responder 3 preguntas de
-negocio sin necesitar tablas separadas:
-  1. Uso efectivo vs. turnos cancelados por parque/predio -> filtrar
-     tipoReserva=ESPACIO y comparar cantidadConfirmadas vs cantidadCanceladas.
-  2. Distribucion de asistencias por tematica -> filtrar tipoReserva=EVENTO
-     y agrupar/sumar inscriptos por categoria (CULTURAL/DEPORTIVO/RECREATIVO).
-  3. Detalle evento por evento (inscriptos, cupoMaximo, % ocupacion) -> cada
-     fila con tipoReserva=EVENTO ya es un evento.
+NOTA (14/nov): el flujo original de este modulo era Reservas (gold sobre
+reservas.parquet, por recursoId), pero nunca se llego a usar en produccion
+y se decidio no usarlo -- se borraron los blobs de silver/gold que tenia.
+Todo el modulo quedo centrado en Actividades.
 
-inscriptos y pctOcupacion solo cuentan reservas CONFIRMADA (una cancelada
-no debe sumar como inscripto real ni ocupar cupo; una PENDIENTE tampoco,
-hasta que se confirme).
+Cubre las 6 metricas de CONTRATO_ESPACIOS.md seccion 5:
+  1. Culturales canceladas por clima -> estado_actual=CANCELADA,
+     causaTipo=EVENTO_CLIMATICO, categoria=CULTURAL -> cantidadActividades
+  2. Afectadas por reclamo -> causaTipo=RECLAMO -> cantidadActividades
+  3. Eventos masivos creados -> sumar cantidadMasivas (capacidad >= 500)
+  4. Afectadas por incidente vial -> causaTipo=INCIDENTE_VIAL ->
+     cantidadActividades (actividades DISTINTAS)
+  5. Modificadas por accidente vial -> sumar totalVecesAccidenteVial
+     (ACCIDENTE_VIAL es un causaTipo DISTINTO de INCIDENTE_VIAL del caso 4,
+     no un typo -- confirmado con datos reales: 18 eventos INCIDENTE_VIAL
+     vs 15 ACCIDENTE_VIAL)
+  6. Ciudadanos vs. ciudad -> agrupar por organizadorTipo
+Las 3 primeras se obtienen filtrando/sumando esta misma tabla agrupada por
+estado_actual/categoria/causaTipo/organizadorTipo, igual que el resto de
+los dominios (ver bp_emergencias_gold.py).
+
+Ademas se agrupa por barrio (derivado en silver por point-in-polygon contra
+lat/lng, ver espacios/_barrios.py -- el evento no trae barrio) para poder
+ver la cantidad de actividades por barrio y categoria.
 
 Al igual que en el resto de las tablas gold, aca no hay incremental/
 checkpoint: cada corrida recalcula el resumen entero a partir de la tabla
@@ -33,15 +45,15 @@ import pandas as pd
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient
 
-from .bp_espacios_silver import leer_tabla
-from .bp_espacios_silver import get_blob_client as get_silver_blob_client
+from .bp_espacios_silver import leer_tabla_actividades
+from .bp_espacios_silver import get_blob_client_actividades as get_silver_blob_client_actividades
 
 bp = func.Blueprint()
 
 GOLD_CONTAINER_NAME = "gold"
-TABLA_ESPACIOS_GOLD_BLOB = "Espacios Publicos y Cultura/reservas_resumen.parquet"
+TABLA_ACTIVIDADES_GOLD_BLOB = "Espacios Publicos y Cultura/actividades_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["recursoId", "tipoReserva", "categoria", "zona", "cupoMaximo"]
+COLUMNAS_GRANULARIDAD_ACTIVIDAD = ["estado_actual", "categoria", "causaTipo", "organizadorTipo", "barrio"]
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
@@ -57,60 +69,49 @@ def _get_gold_container_client():
     return container_client
 
 
-def _get_gold_blob_client(nombre_blob: str = TABLA_ESPACIOS_GOLD_BLOB):
+def _get_gold_blob_client_actividades(nombre_blob: str = TABLA_ACTIVIDADES_GOLD_BLOB):
     return _get_gold_container_client().get_blob_client(nombre_blob)
 
 
 # --- Agregacion --------------------------------------------------------------
 
-def _pct_ocupacion(fila: pd.Series):
-    """inscriptos / cupoMaximo, en porcentaje. None si el recurso no tiene
-    cupoMaximo (caso ESPACIO) o si es 0."""
-    cupo = fila["cupoMaximo"]
-    if pd.isna(cupo) or cupo <= 0:
-        return None
-    return round(fila["inscriptos"] / cupo * 100, 2)
-
-
-def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = None) -> pd.DataFrame:
-    """Una fila por recursoId, con cuantas reservas tiene confirmadas,
-    canceladas y en total, mas inscriptos (personas de las reservas
-    CONFIRMADA) y % de ocupacion sobre cupoMaximo (solo tiene sentido para
-    EVENTO; en ESPACIO queda null). fecha_snapshot marca el momento en que
-    se calculo este resumen (por defecto, hoy); se puede pasar explicito
-    para reprocesos."""
-    df = df_silver.copy()
-    df["_personas_confirmadas"] = df["cantidadPersonas"].where(df["confirmada"], 0)
-
+def calcular_resumen_actividades(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = None) -> pd.DataFrame:
+    """Una fila por combinacion de estado_actual/categoria/causaTipo/
+    organizadorTipo/barrio, con la cantidad de actividades, cuantas son masivas
+    (capacidad >= 500) y el total de modificaciones por cada causa (suma de
+    los contadores veces_<causa> de silver). fecha_snapshot marca el
+    momento en que se calculo este resumen (por defecto, ahora); se puede
+    pasar explicito para reprocesos."""
     resumen = (
-        df.groupby(COLUMNAS_GRANULARIDAD, dropna=False)
+        df_silver.groupby(COLUMNAS_GRANULARIDAD_ACTIVIDAD, dropna=False)
         .agg(
-            cantidadTotal=("reservaId", "count"),
-            cantidadConfirmadas=("confirmada", "sum"),
-            cantidadCanceladas=("cancelada", "sum"),
-            inscriptos=("_personas_confirmadas", "sum"),
+            cantidadActividades=("actividadId", "count"),
+            cantidadMasivas=("masivo", "sum"),
+            totalVecesEventoClimatico=("veces_evento_climatico", "sum"),
+            totalVecesReclamo=("veces_reclamo", "sum"),
+            totalVecesIncidenteVial=("veces_incidente_vial", "sum"),
+            totalVecesAccidenteVial=("veces_accidente_vial", "sum"),
         )
         .reset_index()
     )
-    resumen["pctOcupacion"] = resumen.apply(_pct_ocupacion, axis=1)
     resumen["fecha_snapshot"] = (fecha_snapshot or datetime.now(timezone.utc)).date()
     return resumen
 
 
 # --- Nombrado y escritura del resultado -------------------------------------
 
-def nombre_snapshot_semanal(fecha: datetime) -> str:
+def nombre_snapshot_semanal_actividades(fecha: datetime) -> str:
     """Nombre del parquet de snapshot semanal (se guarda los domingos), con
     la semana ISO del año en la que cae `fecha`."""
     anio, semana, _ = fecha.isocalendar()
-    return f"Espacios Publicos y Cultura/reservas_resumen_{semana:02d}_{anio}.parquet"
+    return f"Espacios Publicos y Cultura/actividades_resumen_{semana:02d}_{anio}.parquet"
 
 
-def escribir_resumen(df_resumen: pd.DataFrame, nombre_blob: str = TABLA_ESPACIOS_GOLD_BLOB) -> None:
+def escribir_resumen_actividades(df_resumen: pd.DataFrame, nombre_blob: str = TABLA_ACTIVIDADES_GOLD_BLOB) -> None:
     buffer = BytesIO()
     df_resumen.to_parquet(buffer, index=False)
     buffer.seek(0)
-    _get_gold_blob_client(nombre_blob).upload_blob(buffer, overwrite=True)
+    _get_gold_blob_client_actividades(nombre_blob).upload_blob(buffer, overwrite=True)
 
 
 # --- Trigger: corre 1 vez por dia, despues de silver ------------------------
@@ -121,21 +122,21 @@ def escribir_resumen(df_resumen: pd.DataFrame, nombre_blob: str = TABLA_ESPACIOS
     run_on_startup=False,
     use_monitor=False,
 )
-def espacios_silver_a_gold(timer: func.TimerRequest):
+def espacios_actividades_silver_a_gold(timer: func.TimerRequest):
     """Corre una vez por dia a la 1am, una hora despues de que
     bp_espacios_silver corre a las 00:00, y recalcula el resumen agregado
-    de gold desde cero a partir de la tabla de silver completa."""
-    logging.info("Corrida diaria de espacios silver->gold.")
+    de actividades desde cero a partir de la tabla de silver completa."""
+    logging.info("Corrida diaria de espacios (actividades) silver->gold.")
 
     fecha_snapshot = datetime.now(timezone.utc)
 
-    df_silver = leer_tabla(get_silver_blob_client())
-    resumen = calcular_resumen(df_silver, fecha_snapshot=fecha_snapshot)
-    escribir_resumen(resumen)
+    df_silver = leer_tabla_actividades(get_silver_blob_client_actividades())
+    resumen = calcular_resumen_actividades(df_silver, fecha_snapshot=fecha_snapshot)
+    escribir_resumen_actividades(resumen)
 
     if fecha_snapshot.weekday() == 6:  # domingo
-        nombre_blob = nombre_snapshot_semanal(fecha_snapshot)
-        escribir_resumen(resumen, nombre_blob=nombre_blob)
+        nombre_blob = nombre_snapshot_semanal_actividades(fecha_snapshot)
+        escribir_resumen_actividades(resumen, nombre_blob=nombre_blob)
         logging.info(f"Es domingo: snapshot semanal guardado en {nombre_blob}")
 
-    logging.info(f"Resumen gold de espacios actualizado: {len(resumen)} filas.")
+    logging.info(f"Resumen gold de actividades actualizado: {len(resumen)} filas.")

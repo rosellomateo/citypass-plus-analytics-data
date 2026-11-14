@@ -1,26 +1,44 @@
-"""Capa silver de gestion de residuos inteligente.
+"""Capa silver de gestion de residuos inteligente (intervenciones, Grupo 6).
 
 Timer trigger diario que lee los eventos crudos de bronze/Gestion de
-Residuos Inteligente/ (AlertaGenerada y RecoleccionCompletada) y arma una
-tabla en silver/Gestion de Residuos Inteligente/alertas.parquet: una fila
-por alerta, enriquecida con los datos de la recoleccion que la resolvio
-(si existe).
+Residuos Inteligente/ (IntervencionProgramada y IntervencionActualizada) y
+arma una tabla en silver/Gestion de Residuos Inteligente/intervenciones.parquet:
+una fila por intervencion (join por intervencionId), con el historial de
+fechas por estado.
 
-A diferencia de movilidad (mismo id en ambos eventos), aca AlertaGenerada y
-RecoleccionCompletada tienen ids distintos (alertaId / recoleccionId) y la
-relacion es opcional: una RecoleccionCompletada con alertaId=null viene de
-un recorrido programado, no de una alerta, y por lo tanto no tiene fila en
-esta tabla (se loguea, no se pierde en silencio, pero no se representa aca).
+Los eventos AlertaGenerada/RecoleccionCompletada que este archivo manejaba
+antes eran una suposicion de antes de confirmar el bus real (nunca llegaron
+a tener datos reales en bronze, nunca se escucharon esos topicos). Los
+eventos reales que publica Residuos para este flujo son
+IntervencionProgramada/IntervencionActualizada.
 
-Procesa solo lo nuevo desde la ultima corrida (checkpoint mas abajo), mismo
-patron que bp_reclamos_silver.py / bp_movilidad_silver.py. Para reprocesar
-todo el historico usar scripts/reprocesar_residuos_silver.py.
+correlationId NO es la clave de relacion entre los dos eventos (a diferencia
+de Emergencias): aca correlationId apunta a la entidad externa que origino
+la intervencion (el emergenciaId, o "act-<actividadId>"/"res-<reservaId>" de
+las actividades masivas) y el MISMO correlationId puede repetirse en varias
+intervenciones distintas (varios camiones enviados al mismo caso -- lo
+confirmamos con datos reales: hasta 5 intervenciones comparten un
+correlationId). La clave real es intervencionId, que identifica la parada
+en si ("para Analitica, cada parada es una intervencion").
+
+Estados observados hoy: PROGRAMADA (por creacion) -> AFECTADA (unica
+transicion que manda IntervencionActualizada, nunca se revisita). Se
+modela con el mismo esqueleto ESTADOS/COLUMNA_FECHA_POR_ESTADO que el resto
+de los dominios, pero NO con su misma regla de "la fecha mas reciente
+manda": programadaEn es una fecha agendada (puede quedar en el futuro, o
+ser posterior a cuando se registro la afectacion), no el momento en que
+ocurrio una transicion. Por eso estado_actual sale del orden de ESTADOS
+(el mas avanzado con fecha cargada), no de comparar fechas -- ver
+_actualizar_estado_actual.
+
+Procesa solo lo nuevo desde la ultima corrida (checkpoint mas abajo). Para
+reprocesar todo el historico usar scripts/reprocesar_residuos_silver.py.
 """
 import azure.functions as func
 import logging
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 
 import pandas as pd
@@ -34,131 +52,175 @@ bp = func.Blueprint()
 BRONZE_CONTAINER_NAME = "bronze"
 SILVER_CONTAINER_NAME = "silver"
 PREFIJO_RESIDUOS = "Gestion de Residuos Inteligente/"
-TABLA_ALERTAS_BLOB = "Gestion de Residuos Inteligente/alertas.parquet"
+TABLA_INTERVENCIONES_BLOB = "Gestion de Residuos Inteligente/intervenciones.parquet"
 CHECKPOINT_BLOB = "Gestion de Residuos Inteligente/_checkpoint.json"
 
+ESTADOS = ["PROGRAMADA", "AFECTADA"]
+COLUMNA_FECHA_POR_ESTADO = {estado: f"fecha_{estado.lower()}" for estado in ESTADOS}
+ESTADO_POR_COLUMNA_FECHA = {columna: estado for estado, columna in COLUMNA_FECHA_POR_ESTADO.items()}
+
 COLUMNAS_BASE = [
-    "alertaId",
+    "intervencionId",
+    "emergenciaId",
     "contenedorId",
-    "tipoAlerta",
-    "nivelLlenado",
-    "zona",
-    "prioridad",
+    "latitud",
+    "longitud",
+    "camionId",
+    "alertaId",
+    "causaId",
+    "causaTipo",
     "correlationId",
-    "fechaAlerta",
 ]
 
 COLUMNAS = [
     *COLUMNAS_BASE,
-    "recoleccionId",
-    "camionId",
-    "fechaRecoleccion",
-    "resuelta",
-    "tiempo_resolucion_minutos",
+    *COLUMNA_FECHA_POR_ESTADO.values(),
+    "estado_actual",
+    "estado_anterior",
+    "afectada",
 ]
 
 
 # --- Helpers para armar/actualizar una fila de la tabla -------------------
 
+def _epoch_ms_a_datetime(epoch_ms):
+    """programadaEn/occurredAt vienen en epoch milliseconds."""
+    if epoch_ms is None:
+        return None
+    try:
+        return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        logging.warning(f"programadaEn/occurredAt no es un epoch valido: {epoch_ms!r}")
+        return None
+
+
 def _iso_a_datetime(iso_str):
-    """occurredAt viene en ISO-8601; lo pasamos a Timestamp UTC
-    (pd.to_datetime tolera con/sin offset y el sufijo 'Z')."""
+    """updatedAt viene en ISO-8601."""
     if iso_str is None:
         return None
-    return pd.to_datetime(iso_str, utc=True)
+    try:
+        return pd.to_datetime(iso_str, utc=True)
+    except (ValueError, TypeError):
+        logging.warning(f"No se pudo parsear como fecha: {iso_str!r}")
+        return None
 
 
 def dataframe_vacio() -> pd.DataFrame:
     """Tabla vacia con el esquema completo ya tipado, para arrancar desde
     cero o cuando todavia no existe el parquet en silver."""
     df = pd.DataFrame(columns=COLUMNAS)
-    for col in ("fechaAlerta", "fechaRecoleccion"):
+    for col in COLUMNA_FECHA_POR_ESTADO.values():
         df[col] = pd.to_datetime(df[col], utc=True)
-    df["resuelta"] = df["resuelta"].astype(bool)
+    df["afectada"] = df["afectada"].astype(bool)
     return df
 
 
-def _fila_nueva(alerta_id: str) -> dict:
-    """Fila placeholder para un alertaId que todavia no tiene datos (se usa
-    tanto para una AlertaGenerada nueva como para una RecoleccionCompletada
-    que llega antes que su AlertaGenerada)."""
+def _fila_nueva(intervencion_id: str) -> dict:
+    """Fila placeholder para un intervencionId que todavia no tiene datos
+    (se usa tanto para una IntervencionProgramada nueva como para una
+    IntervencionActualizada que llega antes que su IntervencionProgramada --
+    visto en produccion, pasa seguido)."""
     fila = {col: None for col in COLUMNAS}
-    fila["alertaId"] = alerta_id
-    fila["resuelta"] = False
+    fila["intervencionId"] = intervencion_id
+    fila["afectada"] = False
     return fila
 
 
+def _actualizar_estado_actual(df: pd.DataFrame, idx) -> None:
+    """estado_actual = el estado mas avanzado conocido en la secuencia
+    PROGRAMADA -> AFECTADA.
+
+    A diferencia de Reclamos/Emergencias, ACA NO sirve "la fecha mas
+    reciente gana": fecha_programada es una fecha agendada (programadaEn),
+    no el momento en que ocurrio una transicion -- y puede ser posterior a
+    fecha_afectada si la afectacion ocurrio antes de la visita programada
+    (pasa seguido en produccion). Por eso se recorre ESTADOS al reves y se
+    devuelve el primero con fecha cargada."""
+    for estado in reversed(ESTADOS):
+        if pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO[estado]]):
+            df.at[idx, "estado_actual"] = estado
+            return
+    df.at[idx, "estado_actual"] = None
+
+
 def _actualizar_derivados(df: pd.DataFrame, idx) -> None:
-    """resuelta = ya llego la RecoleccionCompletada que cierra esta alerta.
-    tiempo_resolucion_minutos solo se calcula si ya tenemos las dos puntas."""
-    fecha_alerta = df.at[idx, "fechaAlerta"]
-    fecha_recoleccion = df.at[idx, "fechaRecoleccion"]
-
-    df.at[idx, "resuelta"] = pd.notna(fecha_recoleccion)
-
-    if pd.isna(fecha_alerta) or pd.isna(fecha_recoleccion):
-        df.at[idx, "tiempo_resolucion_minutos"] = None
-    else:
-        df.at[idx, "tiempo_resolucion_minutos"] = (fecha_recoleccion - fecha_alerta).total_seconds() / 60
+    df.at[idx, "afectada"] = pd.notna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["AFECTADA"]])
+    _actualizar_estado_actual(df, idx)
 
 
-# --- Aplicar eventos (Alerta / Recoleccion) sobre el DataFrame ------------
+# --- Aplicar eventos (Programada / Actualizada) sobre el DataFrame --------
 
-def upsert_alerta(df: pd.DataFrame, data: dict) -> pd.DataFrame:
-    """Alta o completado de la fila a partir de una AlertaGenerada. Si la
-    alerta ya tiene fechaAlerta cargada, es un evento duplicado: se ignora
-    en vez de reprocesarlo."""
-    alerta_id = data.get("alertaId")
+def upsert_programada(df: pd.DataFrame, data: dict) -> pd.DataFrame:
+    """Alta de la fila a partir de una IntervencionProgramada. Si la
+    intervencion ya tiene fecha_programada cargada, es un evento duplicado:
+    se ignora."""
+    intervencion_id = data.get("intervencionId")
+    columna_programada = COLUMNA_FECHA_POR_ESTADO["PROGRAMADA"]
 
-    if alerta_id in df["alertaId"].values:
-        idx = df.index[df["alertaId"] == alerta_id][0]
-        if pd.notna(df.at[idx, "fechaAlerta"]):
-            logging.info(f"AlertaGenerada duplicada para {alerta_id}, se ignora.")
+    if intervencion_id in df["intervencionId"].values:
+        idx = df.index[df["intervencionId"] == intervencion_id][0]
+        if pd.notna(df.at[idx, columna_programada]):
+            logging.info(f"IntervencionProgramada duplicada para {intervencion_id}, se ignora.")
             return df
     else:
-        df = pd.concat([df, pd.DataFrame([_fila_nueva(alerta_id)])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([_fila_nueva(intervencion_id)])], ignore_index=True)
 
-    idx = df.index[df["alertaId"] == alerta_id][0]
+    idx = df.index[df["intervencionId"] == intervencion_id][0]
 
-    df.at[idx, "contenedorId"] = data.get("contenedorId")
-    df.at[idx, "tipoAlerta"] = data.get("tipoAlerta")
-    df.at[idx, "nivelLlenado"] = data.get("nivelLlenado")
-    df.at[idx, "zona"] = data.get("zona")
-    df.at[idx, "prioridad"] = data.get("prioridad")
-    df.at[idx, "correlationId"] = data.get("correlationId")
-    df.at[idx, "fechaAlerta"] = _iso_a_datetime(data.get("occurredAt"))
+    for col in COLUMNAS_BASE:
+        if col != "intervencionId":
+            df.at[idx, col] = data.get(col)
+
+    df.at[idx, columna_programada] = _epoch_ms_a_datetime(data.get("programadaEn"))
+    # Si la IntervencionActualizada (AFECTADA) ya llego antes -- out of
+    # order, pasa seguido -- no pisamos el estado_anterior que ya puso: la
+    # intervencion sigue siendo AFECTADA con PROGRAMADA como anterior.
+    if pd.isna(df.at[idx, COLUMNA_FECHA_POR_ESTADO["AFECTADA"]]):
+        df.at[idx, "estado_anterior"] = None
 
     _actualizar_derivados(df, idx)
     return df
 
 
-def aplicar_recoleccion(df: pd.DataFrame, data: dict) -> pd.DataFrame | None:
-    """Completa la fila de la alerta con los datos de la RecoleccionCompletada
-    que la resolvio (creando una fila placeholder si la AlertaGenerada
-    todavia no llego). Si la recoleccion no trae alertaId (recorrido
-    programado) o si esa alerta ya tenia una recoleccion cargada
-    (duplicado), no hay nada que actualizar y se devuelve None."""
-    alerta_id = data.get("alertaId")
-    if alerta_id is None:
-        logging.info(
-            f"RecoleccionCompletada {data.get('recoleccionId')} sin alertaId "
-            "(recorrido programado): no se refleja en la tabla de alertas."
-        )
-        return None
+def aplicar_actualizada(df: pd.DataFrame, data: dict) -> pd.DataFrame:
+    """Aplica una IntervencionActualizada (creando una fila placeholder si
+    la IntervencionProgramada todavia no llego). Si la intervencion ya
+    tiene fecha cargada para ese estadoNuevo puntual, es un evento
+    duplicado: se ignora.
 
-    if alerta_id in df["alertaId"].values:
-        idx = df.index[df["alertaId"] == alerta_id][0]
-        if pd.notna(df.at[idx, "recoleccionId"]):
-            logging.info(f"RecoleccionCompletada duplicada para alerta {alerta_id}, se ignora.")
-            return None
+    A diferencia de Reclamos/Emergencias no hace falta "es la transicion
+    mas reciente": en los datos reales PROGRAMADA -> AFECTADA es la unica
+    transicion posible (nunca se revisita un estado), asi que estos campos
+    se aplican directo, sin comparar fechas."""
+    intervencion_id = data.get("intervencionId")
+    estado_nuevo = data.get("estadoNuevo")
+
+    columna_fecha = COLUMNA_FECHA_POR_ESTADO.get(estado_nuevo)
+    if columna_fecha is None:
+        logging.warning(f"estadoNuevo desconocido '{estado_nuevo}' en intervencion {intervencion_id}")
+        return df
+
+    if intervencion_id in df["intervencionId"].values:
+        idx = df.index[df["intervencionId"] == intervencion_id][0]
+        if pd.notna(df.at[idx, columna_fecha]):
+            logging.info(f"IntervencionActualizada duplicada (estado {estado_nuevo}) para {intervencion_id}, se ignora.")
+            return df
     else:
-        df = pd.concat([df, pd.DataFrame([_fila_nueva(alerta_id)])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([_fila_nueva(intervencion_id)])], ignore_index=True)
 
-    idx = df.index[df["alertaId"] == alerta_id][0]
+    idx = df.index[df["intervencionId"] == intervencion_id][0]
 
-    df.at[idx, "recoleccionId"] = data.get("recoleccionId")
+    df.at[idx, "estado_anterior"] = data.get("estadoAnterior")
+    # camionId se asigna recien al despachar: viene null en Programada y
+    # completo aca. causaId/causaTipo los repite el productor, pero por si
+    # alguna vez vienen distintos nos quedamos con el valor no nulo.
     df.at[idx, "camionId"] = data.get("camionId")
-    df.at[idx, "fechaRecoleccion"] = _iso_a_datetime(data.get("occurredAt"))
+    if data.get("causaId") is not None:
+        df.at[idx, "causaId"] = data.get("causaId")
+    if data.get("causaTipo") is not None:
+        df.at[idx, "causaTipo"] = data.get("causaTipo")
+
+    df.at[idx, columna_fecha] = _iso_a_datetime(data.get("updatedAt"))
 
     _actualizar_derivados(df, idx)
     return df
@@ -177,7 +239,7 @@ def get_bronze_container_client():
 
 
 def get_blob_client():
-    return _get_container_client(SILVER_CONTAINER_NAME).get_blob_client(TABLA_ALERTAS_BLOB)
+    return _get_container_client(SILVER_CONTAINER_NAME).get_blob_client(TABLA_INTERVENCIONES_BLOB)
 
 
 def leer_checkpoint() -> datetime | None:
@@ -217,18 +279,16 @@ def escribir_tabla(blob_client, df: pd.DataFrame) -> None:
 # --- Dispatcher: aplica el evento correcto segun su eventType -------------
 
 def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
-    """Aplica un evento de residuos (AlertaGenerada o RecoleccionCompletada)
-    al DataFrame. Devuelve None si el eventType no es reconocido, o si el
-    evento es valido pero no corresponde reflejarlo en esta tabla (ver
-    aplicar_recoleccion)."""
+    """Aplica un evento de residuos (Programada o Actualizada) al
+    DataFrame. Devuelve None si el eventType no es reconocido."""
     data = evento.get("data", {})
     event_type = evento.get("metadata", {}).get("eventType", "")
     tipo_evento = event_type.split(".")[-1]
 
-    if tipo_evento == "AlertaGenerada":
-        return upsert_alerta(df, data)
-    if tipo_evento == "RecoleccionCompletada":
-        return aplicar_recoleccion(df, data)
+    if tipo_evento == "IntervencionProgramada":
+        return upsert_programada(df, data)
+    if tipo_evento == "IntervencionActualizada":
+        return aplicar_actualizada(df, data)
 
     logging.warning(f"eventType inesperado para residuos: {event_type!r}")
     return None
@@ -243,10 +303,10 @@ def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
     use_monitor=False,
 )
 def residuos_bronze_a_silver(timer: func.TimerRequest):
-    """Corre una vez por dia. Lee de bronze/Gestion de Residuos Inteligente/
-    solo los blobs subidos despues del checkpoint de la corrida anterior
-    (blobs.last_modified, que pone el propio storage) y los aplica sobre la
-    tabla de silver existente."""
+    """Corre una vez por dia. Lee de bronze/Gestion de Residuos
+    Inteligente/ solo los blobs subidos despues del checkpoint de la
+    corrida anterior (blobs.last_modified, que pone el propio storage) y
+    los aplica sobre la tabla de silver existente."""
     checkpoint = leer_checkpoint()
     logging.info(f"Corrida diaria de residuos bronze->silver. Checkpoint anterior: {checkpoint}")
 
@@ -258,7 +318,7 @@ def residuos_bronze_a_silver(timer: func.TimerRequest):
     blobs_nuevos.sort(key=lambda blob: blob.last_modified)
 
     if not blobs_nuevos:
-        logging.info("No hay alertas ni recolecciones nuevas desde la ultima corrida.")
+        logging.info("No hay intervenciones nuevas ni actualizadas desde la ultima corrida.")
         return
 
     blob_client = get_blob_client()

@@ -1,12 +1,12 @@
-"""Reconstruye silver/Espacios Publicos y Cultura/reservas.parquet desde
-cero, reprocesando TODOS los eventos que ya existen en bronze/Espacios
-Publicos y Cultura/.
+"""Reconstruye silver/Espacios Publicos y Cultura/actividades.parquet desde
+cero, reprocesando TODOS los eventos ActividadCreada/ActividadModificada que
+ya existen en bronze/Espacios Publicos y Cultura/.
 
 Ver scripts/reprocesar_reclamos_silver.py para la explicacion completa del
 por que hace falta esto (receipts del blob trigger).
 
 Uso:
-    python scripts/reprocesar_espacios_silver.py
+    python scripts/reprocesar_espacios_actividades_silver.py
 """
 import json
 import os
@@ -20,10 +20,10 @@ from _storage import blob_service_client, connection_string  # noqa: E402
 os.environ.setdefault("STORAGE_CONNECTION_STRING", connection_string())
 
 from espacios.bp_espacios_silver import (  # noqa: E402
-    aplicar_evento,
-    dataframe_vacio,
+    aplicar_evento_actividad,
+    dataframe_vacio_actividades,
     escribir_tabla,
-    get_blob_client,
+    get_blob_client_actividades,
 )
 
 BRONZE_CONTAINER = "bronze"
@@ -33,7 +33,7 @@ PREFIJO_ESPACIOS = "Espacios Publicos y Cultura/"
 def main():
     container_client = blob_service_client().get_container_client(BRONZE_CONTAINER)
 
-    df = dataframe_vacio()
+    df = dataframe_vacio_actividades()
     procesados = 0
     ignorados = 0
 
@@ -47,16 +47,16 @@ def main():
             ignorados += 1
             continue
 
-        df_actualizado = aplicar_evento(df, evento)
+        df_actualizado = aplicar_evento_actividad(df, evento)
         if df_actualizado is None:
-            print(f"Ignorado (eventType inesperado): {blob.name}")
+            # Incluye los eventos de Reserva, que este dispatcher no maneja.
             ignorados += 1
             continue
 
         df = df_actualizado
         procesados += 1
 
-    escribir_tabla(get_blob_client(), df)
+    escribir_tabla(get_blob_client_actividades(), df)
     print(f"Listo: {procesados} eventos procesados, {ignorados} ignorados, {len(df)} filas en la tabla.")
 
 

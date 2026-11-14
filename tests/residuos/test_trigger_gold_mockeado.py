@@ -1,5 +1,6 @@
-"""Nivel 3 de Gold (Residuos): confirma lectura de Silver mockeada, el
-bucketizado de nivel de llenado, y snapshot los domingos."""
+"""Nivel 3 de Gold (Residuos): confirma que el trigger lee Silver
+(mockeado), calcula el resumen, lo sube, y que -si el dia es domingo-
+ADEMAS guarda el snapshot semanal con el nombre correcto."""
 from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -17,10 +18,10 @@ def _env_falso(monkeypatch):
 
 
 def _tabla_silver_de_prueba() -> bytes:
-    filas = [{
-        "alertaId": "A-001", "zona": "Caballito", "tipoAlerta": "LLENO", "prioridad": "MEDIA",
-        "nivelLlenado": 85, "resuelta": True, "tiempo_resolucion_minutos": 30.0,
-    }]
+    filas = [
+        {"intervencionId": "I-001", "estado_actual": "AFECTADA", "causaTipo": "EVENTO_PUBLICO", "afectada": True},
+        {"intervencionId": "I-002", "estado_actual": "AFECTADA", "causaTipo": "EVENTO_PUBLICO", "afectada": True},
+    ]
     df = pd.DataFrame(filas)
     buffer = BytesIO()
     df.to_parquet(buffer, index=False)
@@ -30,7 +31,7 @@ def _tabla_silver_de_prueba() -> bytes:
 def test_trigger_gold_calcula_resumen_y_guarda_snapshot_los_domingos():
     silver = ContenedorSilverFalso(tabla_previa=_tabla_silver_de_prueba())
     gold = ContenedorGoldFalso()
-    fecha_domingo = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    fecha_domingo = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)  # confirmado que es domingo
 
     with patch.object(
         gold_mod.BlobServiceClient, "from_connection_string",
@@ -39,13 +40,12 @@ def test_trigger_gold_calcula_resumen_y_guarda_snapshot_los_domingos():
         datetime_mock.now.return_value = fecha_domingo
         gold_mod.residuos_silver_a_gold(MagicMock())
 
-    acumulado = gold._blobs["Gestion de Residuos Inteligente/alertas_resumen.parquet"]
+    acumulado = gold._blobs["Gestion de Residuos Inteligente/intervenciones_resumen.parquet"]
     assert len(acumulado.subidas) == 1
     df_resumen = pd.read_parquet(BytesIO(acumulado.subidas[0]))
-    assert df_resumen.iloc[0]["rangoNivelLlenado"] == "80-100"
-    assert df_resumen.iloc[0]["cantidadResueltas"] == 1
+    assert df_resumen.iloc[0]["cantidadIntervenciones"] == 2
 
     anio, semana, _ = fecha_domingo.isocalendar()
-    nombre_snapshot = f"Gestion de Residuos Inteligente/alertas_resumen_{semana:02d}_{anio}.parquet"
+    nombre_snapshot = f"Gestion de Residuos Inteligente/intervenciones_resumen_{semana:02d}_{anio}.parquet"
     assert nombre_snapshot in gold._blobs
     assert len(gold._blobs[nombre_snapshot].subidas) == 1

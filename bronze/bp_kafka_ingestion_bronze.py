@@ -53,6 +53,13 @@ TOPICOS_DEFAULT = [
     # eventos sin leer, el nuevo porque ahi es donde va a publicar Reclamos de aca
     # en adelante.
     "com.citypass.reclamos.ReclamoCreado.v2",
+    # Nueva rotura de compatibilidad (14/nov): se agrego el campo "estado"
+    # (obligatorio, sin default) -- abrio .v3 y dejo v1/v2 sirviendo su
+    # historial. bp_reclamos_silver.py no necesito cambios: _tipo_evento()
+    # ya le saca el sufijo .v\d+ de forma generica, y "estado" es redundante
+    # con el estado_actual que silver calcula solo (mismo caso que
+    # EmergenciaCreada.estado).
+    "com.citypass.reclamos.ReclamoCreado.v3",
     "com.citypass.reclamos.ReclamoActualizado",
     "com.citypass.reclamos.ReclamoResuelto",
     "com.citypass.reclamos.ReclamoPostEventoClimatico",
@@ -63,9 +70,27 @@ TOPICOS_DEFAULT = [
     "com.citypass.emergencias.EmergenciaActualizada",
     "com.citypass.movilidad.EmergenciaBicicleta",
     "com.citypass.movilidad.ReporteBicicleta",
+    "com.citypass.movilidad.EstacionUrbanaAfectada",
+    "com.citypass.movilidad.EstacionUrbanaRestaurada",
+    # Propuesto por nosotros (ver CONTRATO_MOVILIDAD.md #2.3), todavia no
+    # confirmado por Movilidad -- no esta en /event-types al 14/nov. Lo
+    # suscribimos igual: si no existe el topico, Kafka solo tira un warning
+    # (ver consumir_lote), no rompe la ingesta del resto.
+    "com.citypass.movilidad.ViajeFinalizado",
     "com.citypass.residuos.Crear_Evento",
     "com.citypass.residuos.CriticidadClimaticaConfirmada",
+    "com.citypass.residuos.IntervencionProgramada",
+    "com.citypass.residuos.IntervencionActualizada",
     "com.citypass.turismo.CreacionEvento",
+    # Espacios Publicos: "actividades" (eventos/talleres con cupo).
+    "com.citypass.espacios.ActividadCreada.v2",
+    # Rotura de compatibilidad (14/nov): se agrego organizadorTipo
+    # (obligatorio) -- abrio .v3 y dejo v2 sirviendo su historial. metadata.
+    # eventType no lleva el sufijo de version (confirmado en los eventos
+    # reales), asi que aplicar_evento_actividad() no necesita cambios.
+    "com.citypass.espacios.ActividadCreada.v3",
+    "com.citypass.espacios.ActividadModificada",
+    "com.citypass.espacios.CriticidadClimaticaConfirmada",
     # Grupo 9 (LDAP / Login Federado) -- ver Eventos-login.md.
     "com.citypass.auth.LoginExitoso",
     "com.citypass.auth.TokenRenovado",

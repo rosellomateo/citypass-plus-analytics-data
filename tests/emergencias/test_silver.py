@@ -19,6 +19,7 @@ def _evento_creada(
         "metadata": {"eventType": "com.citypass.emergencias.EmergenciaCreada"},
         "data": {
             "emergenciaId": emergencia_id,
+            "correlationId": emergencia_id,  # el contrato lo garantiza igual al emergenciaId
             "prioridad": "MEDIA",
             "createdAt": creado_en.isoformat(),
             "causaId": causa_id,
@@ -34,6 +35,7 @@ def _evento_actualizada(
 ) -> dict:
     data = {
         "emergenciaId": emergencia_id,
+        "correlationId": emergencia_id,  # el contrato lo garantiza igual al emergenciaId
         "estadoAnterior": estado_anterior,
         "estadoNuevo": estado_nuevo,
         "updatedAt": updated_at.isoformat(),
@@ -154,3 +156,33 @@ def test_emergencia_cancelada_marca_columna_cancelada_y_estado_actual():
     assert fila["cancelada"] == True
     assert fila["descartada"] == False
     assert fila["estado_actual"] == "CANCELADA"
+
+
+def test_actualizada_se_relaciona_por_correlationid_no_por_emergenciaid():
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_creada("E-009", datetime(2026, 9, 1, tzinfo=timezone.utc)))
+
+    evento_actualizada = _evento_actualizada(
+        "E-009", "PENDIENTE", "VALIDADA", datetime(2026, 9, 1, 1, 0, tzinfo=timezone.utc)
+    )
+    # emergenciaId "distinto" en la Actualizada (no deberia pasar en la
+    # practica, pero confirma que lo que realmente se usa para relacionar
+    # es correlationId, no emergenciaId).
+    evento_actualizada["data"]["emergenciaId"] = "OTRO-ID"
+
+    df = aplicar_evento(df, evento_actualizada)
+
+    assert len(df) == 1
+    fila = df.iloc[0]
+    assert fila["correlationId"] == "E-009"
+    assert fila["estado_actual"] == "VALIDADA"
+
+
+def test_actualizada_antes_que_creada_captura_emergenciaid_igual():
+    df = dataframe_vacio()
+    df = aplicar_evento(
+        df, _evento_actualizada("E-010", "PENDIENTE", "VALIDADA", datetime(2026, 9, 1, 1, 0, tzinfo=timezone.utc))
+    )
+
+    fila = df[df["correlationId"] == "E-010"].iloc[0]
+    assert fila["emergenciaId"] == "E-010"

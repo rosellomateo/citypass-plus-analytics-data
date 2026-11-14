@@ -8,6 +8,10 @@ DESPACHADA -> EN_CAMINO -> EN_LUGAR -> RESUELTA -> CERRADA (+ ramas
 DESCARTADA/CANCELADA desde PENDIENTE/VALIDADA), igual que bp_reclamos_silver.py.
 
 Diferencias con reclamos:
+  - Se relaciona EmergenciaCreada con sus EmergenciaActualizada por
+    correlationId, no por emergenciaId (el contrato garantiza que el
+    correlationId de la Actualizada es siempre el mismo de su Creada; ver
+    _fila_nueva/upsert_creada/aplicar_actualizada).
   - Cada EmergenciaActualizada tambien trae quien la atendio (usuarioId),
     a que movil se asigno (asignadoA), que area responde (areaResponsable)
     y el resultado (resolucion) — se guardan como "ultimo valor conocido",
@@ -135,12 +139,12 @@ def dataframe_vacio() -> pd.DataFrame:
     return df
 
 
-def _fila_nueva(emergencia_id: str) -> dict:
-    """Fila placeholder para un emergenciaId que todavia no tiene datos (se
+def _fila_nueva(correlation_id: str) -> dict:
+    """Fila placeholder para un correlationId que todavia no tiene datos (se
     usa tanto para una EmergenciaCreada nueva como para una
     EmergenciaActualizada que llega antes que su EmergenciaCreada)."""
     fila = {col: None for col in COLUMNAS}
-    fila["emergenciaId"] = emergencia_id
+    fila["correlationId"] = correlation_id
     fila["resuelta"] = False
     fila["descartada"] = False
     fila["cancelada"] = False
@@ -192,24 +196,28 @@ def _es_la_transicion_mas_reciente(df: pd.DataFrame, idx, fecha) -> bool:
 # --- Aplicar eventos (Creada / Actualizada) sobre el DataFrame ------------
 
 def upsert_creada(df: pd.DataFrame, data: dict) -> pd.DataFrame:
-    """Alta de la fila a partir de una EmergenciaCreada. Si la emergencia ya
-    tiene fecha_creada cargada, es un evento duplicado: se ignora. Si una
+    """Alta de la fila a partir de una EmergenciaCreada. Relaciona los
+    eventos por correlationId (no por emergenciaId): segun el contrato, el
+    correlationId de la EmergenciaActualizada es siempre el mismo de su
+    EmergenciaCreada, y es el campo pensado para vincular eventos del mismo
+    caso entre si (incluso entre modulos). Si la emergencia ya tiene
+    fecha_creada cargada, es un evento duplicado: se ignora. Si una
     EmergenciaActualizada ya llego antes (fuera de orden), no pisa la
     prioridad ni el estado_anterior ya conocidos."""
-    emergencia_id = data.get("emergenciaId")
+    correlation_id = data.get("correlationId")
 
-    if emergencia_id in df["emergenciaId"].values:
-        idx = df.index[df["emergenciaId"] == emergencia_id][0]
+    if correlation_id in df["correlationId"].values:
+        idx = df.index[df["correlationId"] == correlation_id][0]
         if pd.notna(df.at[idx, "fecha_creada"]):
-            logging.info(f"EmergenciaCreada duplicada para {emergencia_id}, se ignora.")
+            logging.info(f"EmergenciaCreada duplicada para {correlation_id}, se ignora.")
             return df
     else:
-        df = pd.concat([df, pd.DataFrame([_fila_nueva(emergencia_id)])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([_fila_nueva(correlation_id)])], ignore_index=True)
 
-    idx = df.index[df["emergenciaId"] == emergencia_id][0]
+    idx = df.index[df["correlationId"] == correlation_id][0]
 
     for col in COLUMNAS_BASE:
-        if col != "emergenciaId":
+        if col != "correlationId":
             df.at[idx, col] = data.get(col)
 
     # latitud/longitud no vienen sueltos: estan anidados en data.ubicacion
@@ -232,26 +240,33 @@ def upsert_creada(df: pd.DataFrame, data: dict) -> pd.DataFrame:
 
 
 def aplicar_actualizada(df: pd.DataFrame, data: dict) -> pd.DataFrame:
-    """Aplica una EmergenciaActualizada (creando una fila placeholder si la
-    EmergenciaCreada todavia no llego). Si la emergencia ya tiene fecha
-    cargada para ese estadoNuevo puntual, es un evento duplicado: se ignora."""
-    emergencia_id = data.get("emergenciaId")
+    """Aplica una EmergenciaActualizada (creando una fila placeholder por
+    correlationId si la EmergenciaCreada todavia no llego). Si la emergencia
+    ya tiene fecha cargada para ese estadoNuevo puntual, es un evento
+    duplicado: se ignora."""
+    correlation_id = data.get("correlationId")
     estado_nuevo = data.get("estadoNuevo")
 
     columna_fecha = COLUMNA_FECHA_POR_ESTADO.get(estado_nuevo)
     if columna_fecha is None:
-        logging.warning(f"estadoNuevo desconocido '{estado_nuevo}' en emergencia {emergencia_id}")
+        logging.warning(f"estadoNuevo desconocido '{estado_nuevo}' en emergencia (correlationId {correlation_id})")
         return df
 
-    if emergencia_id in df["emergenciaId"].values:
-        idx = df.index[df["emergenciaId"] == emergencia_id][0]
+    if correlation_id in df["correlationId"].values:
+        idx = df.index[df["correlationId"] == correlation_id][0]
         if pd.notna(df.at[idx, columna_fecha]):
-            logging.info(f"EmergenciaActualizada duplicada (estado {estado_nuevo}) para {emergencia_id}, se ignora.")
+            logging.info(f"EmergenciaActualizada duplicada (estado {estado_nuevo}) para {correlation_id}, se ignora.")
             return df
     else:
-        df = pd.concat([df, pd.DataFrame([_fila_nueva(emergencia_id)])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame([_fila_nueva(correlation_id)])], ignore_index=True)
 
-    idx = df.index[df["emergenciaId"] == emergencia_id][0]
+    idx = df.index[df["correlationId"] == correlation_id][0]
+
+    # emergenciaId ya no es la clave de la fila, pero igual lo guardamos como
+    # dato: si la EmergenciaActualizada llego antes que su EmergenciaCreada,
+    # es la unica forma de tenerlo hasta que esta ultima aparezca.
+    if pd.isna(df.at[idx, "emergenciaId"]):
+        df.at[idx, "emergenciaId"] = data.get("emergenciaId")
 
     # resueltoAt es mas preciso que updatedAt para RESUELTA/DESCARTADA; si
     # no viene (otros estados), usamos updatedAt.

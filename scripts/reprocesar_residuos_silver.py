@@ -1,6 +1,6 @@
-"""Reconstruye silver/Gestion de Residuos Inteligente/alertas.parquet desde
-cero, reprocesando TODOS los eventos que ya existen en bronze/Gestion de
-Residuos Inteligente/.
+"""Reconstruye silver/Gestion de Residuos Inteligente/intervenciones.parquet
+desde cero, reprocesando TODOS los eventos que ya existen en bronze/Gestion
+de Residuos Inteligente/.
 
 Ver scripts/reprocesar_reclamos_silver.py para la explicacion completa del
 por que hace falta esto (receipts del blob trigger).
@@ -49,7 +49,7 @@ def main():
 
         df_actualizado = aplicar_evento(df, evento)
         if df_actualizado is None:
-            print(f"Ignorado (eventType inesperado o RecoleccionCompletada sin alertaId): {blob.name}")
+            print(f"Ignorado (eventType inesperado): {blob.name}")
             ignorados += 1
             continue
 
