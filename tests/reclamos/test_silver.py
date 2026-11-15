@@ -276,12 +276,16 @@ def test_reclamocreado_organico_queda_con_causa_nula():
     assert pd.isna(fila["causaTipo"])
 
 
-def test_actualizado_se_relaciona_por_correlationid_no_por_reclamoid():
-    # correlationId en Reclamos NO es el reclamoId (son valores distintos en
-    # produccion) -- este test confirma que lo que realmente vincula los
-    # eventos es correlationId.
+def test_actualizado_se_relaciona_por_reclamoid_aunque_correlationid_difiera():
+    # Lo que realmente vincula ReclamoCreado con su ReclamoActualizado es
+    # reclamoId, no correlationId (ver modulo docstring): este test usa
+    # correlationId DISTINTO en cada evento para confirmar que de todas
+    # formas se fusionan en una sola fila (y que correlationId, al ya estar
+    # cargado por el Creado, no se pisa con el del Actualizado).
     df = dataframe_vacio()
-    df = aplicar_evento(df, _evento_creado("R-011", datetime(2026, 11, 9, tzinfo=timezone.utc), correlation_id="CORR-X"))
+    df = aplicar_evento(
+        df, _evento_creado("R-011", datetime(2026, 11, 9, tzinfo=timezone.utc), correlation_id="CORR-CREADO"),
+    )
 
     evento_actualizado = _evento_actualizado(
         "R-011", "RECIBIDO", "ASIGNADO", datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc),
@@ -291,13 +295,44 @@ def test_actualizado_se_relaciona_por_correlationid_no_por_reclamoid():
 
     assert len(df) == 1
     fila = df.iloc[0]
-    assert fila["correlationId"] == "CORR-X"
+    assert fila["correlationId"] == "CORR-CREADO"
     assert fila["estado_actual"] == "ASIGNADO"
 
 
+def test_bug_real_reclamo_sin_correlationid_ya_no_se_fragmenta():
+    # Bug real que encontramos en produccion (15/nov): reclamos reportados
+    # por TELEFONO/APP traen correlationId null en TODOS sus eventos
+    # (ReclamoCreado y cada ReclamoActualizado). Antes del fix esto partia
+    # cada transicion de estado en su propia fila huerfana (sin categoria/
+    # barrio/prioridad, porque esos datos solo vienen en ReclamoCreado),
+    # inflando row_count en gold. reclamoId, en cambio, esta siempre.
+    df = dataframe_vacio()
+    df = aplicar_evento(
+        df, _evento_creado("R-015", datetime(2026, 11, 9, tzinfo=timezone.utc), categoria="TRANSITO", correlation_id=None),
+    )
+    for estado_anterior, estado_nuevo, fecha in [
+        ("RECIBIDO", "ASIGNADO", datetime(2026, 11, 9, 1, tzinfo=timezone.utc)),
+        ("ASIGNADO", "EN_PROCESO", datetime(2026, 11, 9, 2, tzinfo=timezone.utc)),
+        ("EN_PROCESO", "RESUELTO", datetime(2026, 11, 9, 3, tzinfo=timezone.utc)),
+    ]:
+        df = aplicar_evento(
+            df,
+            _evento_actualizado(
+                "R-015", estado_anterior, estado_nuevo, fecha,
+                event_id=f"evt-{estado_nuevo}", correlation_id=None,
+            ),
+        )
+
+    assert len(df) == 1
+    fila = df.iloc[0]
+    assert fila["estado_actual"] == "RESUELTO"
+    assert fila["resuelto"] == True  # noqa: E712
+    assert fila["categoria"] == "TRANSITO"
+
+
 def test_dos_reclamos_con_correlationid_nulo_no_se_fusionan():
-    # Visto en produccion: un ReclamoCreado real sin correlationId. Dos de
-    # esos no deben terminar compartiendo fila solo porque ambos son None.
+    # Cada reclamo tiene su propio reclamoId (la clave real), asi que dos
+    # reclamos distintos sin correlationId no deberian compartir fila.
     df = dataframe_vacio()
     df = aplicar_evento(df, _evento_creado("R-012", datetime(2026, 11, 9, tzinfo=timezone.utc), correlation_id=None))
     df = aplicar_evento(df, _evento_creado("R-013", datetime(2026, 11, 9, 1, 0, tzinfo=timezone.utc), correlation_id=None))

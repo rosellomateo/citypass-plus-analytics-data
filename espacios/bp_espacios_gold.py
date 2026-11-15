@@ -11,8 +11,11 @@ y se decidio no usarlo -- se borraron los blobs de silver/gold que tenia.
 Todo el modulo quedo centrado en Actividades.
 
 Cubre las 6 metricas de CONTRATO_ESPACIOS.md seccion 5:
-  1. Culturales canceladas por clima -> estado_actual=CANCELADA,
-     causaTipo=EVENTO_CLIMATICO, categoria=CULTURAL -> cantidadActividades
+  1. Culturales canceladas por clima -> columna cantidadAfectadasPorClima
+     (categoria=CULTURAL, filtrando el resto de filas de ese grupo). Cuenta
+     estado_actual CANCELADA *o* SUSPENDIDA con causaTipo=EVENTO_CLIMATICO:
+     un evento climatico normalmente suspende, no cancela (confirmado con
+     Espacios), asi que filtrar solo CANCELADA subcuenta la metrica.
   2. Afectadas por reclamo -> causaTipo=RECLAMO -> cantidadActividades
   3. Eventos masivos creados -> sumar cantidadMasivas (capacidad >= 500)
   4. Afectadas por incidente vial -> causaTipo=INCIDENTE_VIAL ->
@@ -75,18 +78,29 @@ def _get_gold_blob_client_actividades(nombre_blob: str = TABLA_ACTIVIDADES_GOLD_
 
 # --- Agregacion --------------------------------------------------------------
 
+ESTADOS_AFECTADA_POR_CLIMA = ("CANCELADA", "SUSPENDIDA")
+
+
 def calcular_resumen_actividades(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = None) -> pd.DataFrame:
     """Una fila por combinacion de estado_actual/categoria/causaTipo/
     organizadorTipo/barrio, con la cantidad de actividades, cuantas son masivas
-    (capacidad >= 500) y el total de modificaciones por cada causa (suma de
-    los contadores veces_<causa> de silver). fecha_snapshot marca el
+    (capacidad >= 500), cuantas quedaron afectadas por un evento climatico
+    (CANCELADA o SUSPENDIDA con causaTipo=EVENTO_CLIMATICO, ver
+    ESTADOS_AFECTADA_POR_CLIMA) y el total de modificaciones por cada causa
+    (suma de los contadores veces_<causa> de silver). fecha_snapshot marca el
     momento en que se calculo este resumen (por defecto, ahora); se puede
     pasar explicito para reprocesos."""
+    df = df_silver.copy()
+    df["afectada_por_clima"] = (
+        df["estado_actual"].isin(ESTADOS_AFECTADA_POR_CLIMA) & (df["causaTipo"] == "EVENTO_CLIMATICO")
+    )
+
     resumen = (
-        df_silver.groupby(COLUMNAS_GRANULARIDAD_ACTIVIDAD, dropna=False)
+        df.groupby(COLUMNAS_GRANULARIDAD_ACTIVIDAD, dropna=False)
         .agg(
             cantidadActividades=("actividadId", "count"),
             cantidadMasivas=("masivo", "sum"),
+            cantidadAfectadasPorClima=("afectada_por_clima", "sum"),
             totalVecesEventoClimatico=("veces_evento_climatico", "sum"),
             totalVecesReclamo=("veces_reclamo", "sum"),
             totalVecesIncidenteVial=("veces_incidente_vial", "sum"),

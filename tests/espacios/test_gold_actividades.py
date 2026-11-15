@@ -49,6 +49,25 @@ def test_caso_1_culturales_canceladas_por_clima():
     assert caso_1["cantidadActividades"].sum() == 2
 
 
+def test_caso_1_un_evento_climatico_tambien_cuenta_si_suspende_en_vez_de_cancelar():
+    # Un evento climatico normalmente suspende (no cancela) la actividad:
+    # cantidadAfectadasPorClima tiene que contar las dos, a diferencia de
+    # cantidadActividades filtrado por estado_actual=CANCELADA, que las deja
+    # afuera y subcuenta la metrica.
+    filas = [
+        _fila("A-020", estado_actual="CANCELADA", categoria="CULTURAL", causa_tipo="EVENTO_CLIMATICO"),
+        _fila("A-021", estado_actual="SUSPENDIDA", categoria="CULTURAL", causa_tipo="EVENTO_CLIMATICO"),
+        _fila("A-022", estado_actual="SUSPENDIDA", categoria="CULTURAL", causa_tipo="RECLAMO"),
+        _fila("A-023", estado_actual="PROGRAMADA", categoria="CULTURAL", causa_tipo=None),
+    ]
+    df_silver = pd.DataFrame(filas)
+
+    resumen = calcular_resumen_actividades(df_silver, fecha_snapshot=datetime(2026, 9, 5, tzinfo=timezone.utc))
+
+    afectadas_culturales = resumen[resumen["categoria"] == "CULTURAL"]["cantidadAfectadasPorClima"].sum()
+    assert afectadas_culturales == 2
+
+
 def test_caso_3_masivas_cuenta_capacidad_mayor_o_igual_500():
     filas = [
         _fila("A-004", capacidad=500),
