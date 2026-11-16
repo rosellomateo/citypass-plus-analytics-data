@@ -106,3 +106,30 @@ def test_criticidad_afectada_ignora_emergencias_sin_prioridadoriginal():
     resumen = calcular_resumen(df_silver, fecha_snapshot=datetime(2026, 9, 5, tzinfo=timezone.utc))
 
     assert resumen.iloc[0]["criticidadAfectada"] == 0
+
+
+def test_tiempo_prom_resolucion_se_calcula_por_causa_tipo():
+    """Caso 5: el tiempo de resolucion de las emergencias en bici sale solo de
+    las MOVILIDAD_BICICLETA resueltas y se repite en todas sus filas (tambien
+    en la de las pendientes); las de otra causa no lo afectan."""
+    df_silver = _df_silver([
+        _fila("E-001", causa_tipo="MOVILIDAD_BICICLETA", estado_actual="RESUELTA"),
+        _fila("E-002", causa_tipo="MOVILIDAD_BICICLETA", estado_actual="RESUELTA"),
+        _fila("E-003", causa_tipo="MOVILIDAD_BICICLETA", estado_actual="PENDIENTE"),
+        _fila("E-004", causa_tipo=None, estado_actual="RESUELTA"),
+    ])
+    creado = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    df_silver["fecha_resuelta"] = pd.to_datetime([
+        creado + timedelta(minutes=10),
+        creado + timedelta(minutes=20),
+        pd.NaT,
+        creado + timedelta(minutes=100),
+    ], utc=True)
+
+    resumen = calcular_resumen(df_silver, fecha_snapshot=datetime(2026, 9, 5, tzinfo=timezone.utc))
+
+    bici = resumen[resumen["causaTipo"] == "MOVILIDAD_BICICLETA"]
+    assert len(bici) == 2  # una fila RESUELTA y otra PENDIENTE
+    assert (bici["tiempoPromResolucion"] == 15.0).all()
+    sin_causa = resumen[resumen["causaTipo"].isna()]
+    assert (sin_causa["tiempoPromResolucion"] == 100.0).all()

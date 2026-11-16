@@ -104,7 +104,25 @@ def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = 
         .reset_index()
     )
 
+    # Caso 5 (emergencia durante un viaje en bici): tiempo promedio de
+    # resolucion (minutos desde fecha_creada hasta fecha_resuelta) por
+    # causaTipo. Misma idea que tiempoPromRespuesta por prioridad: se calcula
+    # una vez por causaTipo sobre todas sus emergencias y se repite en cada
+    # fila de esa causa; si se calculara por combinacion completa, las filas
+    # todavia no resueltas de MOVILIDAD_BICICLETA quedarian vacias.
+    # Las emergencias sin fecha_resuelta (pendientes, descartadas) no suman.
+    if "fecha_resuelta" in df.columns:
+        df["_min_hasta_resuelta"] = (df["fecha_resuelta"] - df["fecha_creada"]).dt.total_seconds() / 60
+    else:
+        df["_min_hasta_resuelta"] = float("nan")
+    tiempos_por_causa = (
+        df.groupby("causaTipo", dropna=False)
+        .agg(tiempoPromResolucion=("_min_hasta_resuelta", "mean"))
+        .reset_index()
+    )
+
     resumen = conteo.merge(tiempos_por_prioridad, on="prioridad", how="left")
+    resumen = resumen.merge(tiempos_por_causa, on="causaTipo", how="left")
     resumen["fecha_snapshot"] = (fecha_snapshot or datetime.now(timezone.utc)).date()
     return resumen
 
