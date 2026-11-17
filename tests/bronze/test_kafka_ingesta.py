@@ -196,6 +196,19 @@ def test_config_del_consumer_sale_de_las_variables_de_entorno(monkeypatch):
     assert config["sasl.oauthbearer.client.id"] == "grupo8"
 
 
+def test_config_indica_donde_estan_los_certificados(monkeypatch):
+    """Sin esto, en Linux (Azure) la libreria busca los certificados en
+    /etc/pki/... y no consigue el token de Login Federado."""
+    import os
+    monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "broker:9092")
+    monkeypatch.setenv("KAFKA_CLIENT_SECRET", "secreto")
+
+    config = kafka_mod.armar_config_consumer()
+
+    assert os.path.isfile(config["https.ca.location"])
+    assert os.path.isfile(config["ssl.ca.location"])
+
+
 def test_config_falla_si_falta_el_secreto(monkeypatch):
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "broker:9092")
     monkeypatch.delenv("KAFKA_CLIENT_SECRET", raising=False)

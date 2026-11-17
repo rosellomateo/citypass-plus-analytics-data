@@ -26,6 +26,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+import certifi
 from azure.storage.blob import BlobServiceClient
 from confluent_kafka import Consumer
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -138,6 +139,14 @@ def armar_config_consumer() -> dict:
         "sasl.oauthbearer.client.id": os.environ.get("KAFKA_CLIENT_ID", CLIENT_ID_DEFAULT),
         "sasl.oauthbearer.client.secret": os.environ["KAFKA_CLIENT_SECRET"],
         "sasl.oauthbearer.token.endpoint.url": os.environ.get("KAFKA_TOKEN_URL", TOKEN_URL_DEFAULT),
+        # Certificados para validar TLS (token de Login Federado y broker).
+        # En Linux (Azure Functions corre sobre Debian) la libreria los busca
+        # en la ruta de RedHat (/etc/pki/tls/certs/ca-bundle.crt), que no
+        # existe: el token falla y la ingesta termina sin leer nada. En Windows
+        # no pasaba porque usa el almacen del sistema. certifi trae su propio
+        # bundle y funciona igual en los dos.
+        "https.ca.location": certifi.where(),
+        "ssl.ca.location": certifi.where(),
     }
 
 
