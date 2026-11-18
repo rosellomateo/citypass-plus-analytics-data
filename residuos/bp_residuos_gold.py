@@ -4,21 +4,23 @@ Timer trigger diario que agrega la tabla completa de silver/Gestion de
 Residuos Inteligente/intervenciones.parquet y guarda el resultado en
 gold/Gestion de Residuos Inteligente/intervenciones_resumen.parquet.
 
-Grano [estado_actual, causaTipo, causaTipoAfectacion, barrio,
+Grano [estado_actual, causaProgramacion, causaTipoAfectacion, barrio,
 origenProgramacion], pensado para las metricas de Residuos de los 6 casos
 de uso (MODELADO_EVENTOS_PARTE2.md, 4.3):
   1. Cuadrillas afectadas por clima -> causaTipoAfectacion = EVENTO_CLIMATICO
      (cantidadAfectadas / cantidadCanceladas)
-  2. Cuadrillas por reclamo, por barrio -> causaTipo = RECLAMO, agrupar por barrio
-  3. Cuadrillas para el evento masivo -> causaTipo = EVENTO_PUBLICO
+  2. Cuadrillas por reclamo, por barrio -> causaProgramacion = RECLAMO, agrupar por barrio
+  3. Cuadrillas para el evento masivo -> causaProgramacion = EVENTO_PUBLICO
   4. Cuadrillas afectadas por incidentes -> causaTipoAfectacion = INCIDENTE_VIAL
   5. Por accidente vs. por alertas normales -> origenProgramacion
      EMERGENCIA (emergenciaId no nulo) vs. ALERTA (alertaId no nulo)
-  6. Cuadrillas cerca del espacio reservado -> causaTipo = RESERVA
+  6. Cuadrillas cerca del espacio reservado -> causaProgramacion = RESERVA
 
-causaTipo es la causa de la PROGRAMACION y causaTipoAfectacion la de la
-AFECTACION/CANCELACION (ver bp_residuos_silver.py). camionesDistintos es por
-fila: no se puede sumar entre filas (el mismo camion puede estar en varias).
+causaProgramacion es la causa de la PROGRAMACION y causaTipoAfectacion la de
+la AFECTACION/CANCELACION (ver bp_residuos_silver.py; en silver esta columna
+todavia se llama causaTipo -- gold la renombra al agrupar, para que no se
+confunda con causaTipoAfectacion). camionesDistintos es por fila: no se
+puede sumar entre filas (el mismo camion puede estar en varias).
 
 Al igual que en gold de reclamos/emergencias, aca no hay incremental/
 checkpoint: cada corrida recalcula el resumen entero a partir de la tabla de
@@ -43,7 +45,7 @@ bp = func.Blueprint()
 GOLD_CONTAINER_NAME = "gold"
 TABLA_RESIDUOS_GOLD_BLOB = "Gestion de Residuos Inteligente/intervenciones_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["estado_actual", "causaTipo", "causaTipoAfectacion", "barrio", "origenProgramacion"]
+COLUMNAS_GRANULARIDAD = ["estado_actual", "causaProgramacion", "causaTipoAfectacion", "barrio", "origenProgramacion"]
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
@@ -90,6 +92,9 @@ def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = 
             df[col] = False
         df[col] = df[col].fillna(False).astype(bool)
     df["origenProgramacion"] = _origen_programacion(df)
+    # En silver esta columna se llama causaTipo; gold la renombra para que no
+    # se confunda con causaTipoAfectacion (ver modulo docstring).
+    df = df.rename(columns={"causaTipo": "causaProgramacion"})
 
     resumen = (
         df.groupby(COLUMNAS_GRANULARIDAD, dropna=False)

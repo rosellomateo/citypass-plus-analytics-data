@@ -51,11 +51,11 @@ def test_calcular_resumen_no_pierde_filas_con_causatipo_nulo():
 
     assert len(resumen) == 1
     assert resumen.iloc[0]["cantidadIntervenciones"] == 2
-    assert pd.isna(resumen.iloc[0]["causaTipo"])
+    assert pd.isna(resumen.iloc[0]["causaProgramacion"])
 
 
 def test_resumen_separa_causa_de_programacion_y_de_afectacion():
-    """Casos 1/4 (causaTipoAfectacion) y 2/3/6 (causaTipo) salen de la misma tabla."""
+    """Casos 1/4 (causaTipoAfectacion) y 2/3/6 (causaProgramacion) salen de la misma tabla."""
     df_silver = pd.DataFrame([
         {"intervencionId": "I-1", "estado_actual": "AFECTADA", "causaTipo": "RECLAMO",
          "causaTipoAfectacion": "EVENTO_CLIMATICO", "barrio": "Palermo", "afectada": True,
@@ -68,7 +68,7 @@ def test_resumen_separa_causa_de_programacion_y_de_afectacion():
     resumen = calcular_resumen(df_silver, fecha_snapshot=datetime(2026, 9, 5, tzinfo=timezone.utc))
 
     clima = resumen[resumen["causaTipoAfectacion"] == "EVENTO_CLIMATICO"].iloc[0]
-    assert clima["causaTipo"] == "RECLAMO"
+    assert clima["causaProgramacion"] == "RECLAMO"
     assert clima["cantidadAfectadas"] == 1
     incidente = resumen[resumen["causaTipoAfectacion"] == "INCIDENTE_VIAL"].iloc[0]
     assert incidente["cantidadCanceladas"] == 1

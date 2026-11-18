@@ -5,7 +5,7 @@ Uso desde terminal:
     python scripts/ver_tabla_gold.py movilidad
     python scripts/ver_tabla_gold.py reclamos --where barrio=Caballito --where categoria=BACHES
     python scripts/ver_tabla_gold.py movilidad --where causaTipo=INCIDENTE_VIAL
-    python scripts/ver_tabla_gold.py residuos --where zona=Palermo
+    python scripts/ver_tabla_gold.py residuos --where barrio=Palermo
     python scripts/ver_tabla_gold.py --path "Reclamos/reclamos_resumen_38_2026.parquet"  # snapshot semanal puntual
 
 Uso desde el editor (boton "Run", sin terminal):
@@ -26,7 +26,7 @@ CONTAINER = "gold"
 TABLAS = {
     "reclamos": {"path": "Reclamos/reclamos_resumen.parquet", "columna_orden": "row_count"},
     "movilidad": {"path": "Movilidad Urbana/movilidad_resumen.parquet", "columna_orden": "cantidadAfectaciones"},
-    "residuos": {"path": "Gestion de Residuos Inteligente/alertas_resumen.parquet", "columna_orden": "cantidadAlertas"},
+    "residuos": {"path": "Gestion de Residuos Inteligente/intervenciones_resumen.parquet", "columna_orden": "cantidadIntervenciones"},
     "espacios": {"path": "Espacios Publicos y Cultura/actividades_resumen.parquet", "columna_orden": "cantidadActividades"},
     "emergencias": {"path": "Emergencias y Seguridad/emergencias_resumen.parquet", "columna_orden": "cantidadEmergencias"},
 }
