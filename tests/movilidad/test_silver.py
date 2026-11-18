@@ -205,3 +205,33 @@ def test_evento_de_viaje_no_lo_procesa_el_dispatcher_de_estaciones():
     evento = {"metadata": {"eventType": "com.citypass.movilidad.ViajeFinalizado"}, "data": {"viajeId": "V-900"}}
 
     assert aplicar_evento_estacion(df, evento) is None
+
+
+def test_fechas_con_nanosegundos_se_recortan_a_microsegundos():
+    """Movilidad manda ".841938634Z": la columna es datetime64[us] y asignar
+    un Timestamp con nanosegundos puede ser un cast con perdida."""
+    from movilidad.bp_movilidad_silver import _iso_a_datetime
+    ts = _iso_a_datetime("2026-11-17T16:17:11.841938634Z")
+    assert ts.unit == "us"
+    assert ts.nanosecond == 0
+    assert ts.microsecond == 841938
+
+
+def test_tabla_de_estaciones_con_fechas_object_se_normaliza():
+    """El parquet de estaciones lo escribio una corrida local y sus fechas
+    quedaron como object: al leerlo se pasan a datetime64[us, UTC]."""
+    from io import BytesIO
+    from unittest.mock import MagicMock
+    import pandas as pd
+    from movilidad.bp_movilidad_silver import leer_tabla_estaciones, COLUMNAS_ESTACION
+    vieja = pd.DataFrame([{c: None for c in COLUMNAS_ESTACION}])
+    vieja["afectacionId"] = "AF-1"
+    vieja["occurredAt"] = pd.Series([pd.Timestamp("2026-11-15T17:40:11.408953Z")], dtype="object")
+    vieja["restaurada"] = None
+    buf = BytesIO(); vieja.to_parquet(buf, index=False)
+    blob = MagicMock(); blob.download_blob.return_value.readall.return_value = buf.getvalue()
+
+    df = leer_tabla_estaciones(blob)
+
+    assert str(df["occurredAt"].dtype) == "datetime64[us, UTC]"
+    assert df["restaurada"].dtype == bool

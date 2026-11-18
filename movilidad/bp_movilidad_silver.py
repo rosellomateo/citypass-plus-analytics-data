@@ -26,7 +26,7 @@ import azure.functions as func
 import logging
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 
 import pandas as pd
@@ -67,7 +67,38 @@ def _iso_a_datetime(iso_str):
     sufijo 'Z')."""
     if iso_str is None:
         return None
-    return pd.to_datetime(iso_str, utc=True)
+    # Movilidad empezo a mandar nanosegundos (".841938634Z") justo cuando se
+    # congelo silver de estaciones; las columnas son datetime64[us]. Se
+    # recorta a microsegundos para que asignar nunca sea un cast con perdida.
+    return pd.to_datetime(iso_str, utc=True).floor("us").as_unit("us")
+
+
+def _normalizar_tipos(df: pd.DataFrame, columnas_fecha, columnas_bool=()) -> pd.DataFrame:
+    """Deja las fechas como datetime64[us, UTC] y los flags como bool, sin
+    importar con que version de pandas se escribio el parquet (el de
+    estaciones lo escribio una corrida local con otra version y sus fechas
+    quedaron como object)."""
+    for col in columnas_fecha:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce").dt.floor("us").astype("datetime64[us, UTC]")
+    for col in columnas_bool:
+        if col in df.columns:
+            df[col] = df[col].fillna(False).astype(bool)
+    return df
+
+
+def _registrar_error(nombre: str) -> None:
+    """Guarda el traceback en silver/Movilidad Urbana/_ultimo_error_<nombre>.txt:
+    App Insights de la Function App esta en otra suscripcion y sin esto no hay
+    forma de ver por que falla una parte."""
+    import traceback
+    try:
+        blob = _get_container_client(SILVER_CONTAINER_NAME).get_blob_client(
+            f"{PREFIJO_MOVILIDAD}_ultimo_error_{nombre}.txt")
+        texto = f"{datetime.now(timezone.utc).isoformat()}\n{traceback.format_exc()}"
+        blob.upload_blob(texto.encode("utf-8"), overwrite=True)
+    except Exception:
+        logging.exception("No se pudo guardar el error en silver")
 
 
 # ===========================================================================
@@ -213,6 +244,7 @@ def movilidad_bronze_a_silver(timer: func.TimerRequest):
             paso()
         except Exception:
             logging.exception(f"Fallo el procesamiento de {nombre} de movilidad bronze->silver")
+            _registrar_error(nombre)
 
 
 def procesar_viajes() -> None:
@@ -382,12 +414,19 @@ def escribir_checkpoint_estaciones(momento: datetime) -> None:
     blob_client.upload_blob(contenido, overwrite=True)
 
 
+_FECHAS_ESTACION = ("afectacionDesde", "afectacionHastaEstimada", "occurredAt", "restauradaAt")
+
+
 def leer_tabla_estaciones(blob_client) -> pd.DataFrame:
     try:
         contenido = blob_client.download_blob().readall()
     except ResourceNotFoundError:
         return dataframe_vacio_estaciones()
-    return pd.read_parquet(BytesIO(contenido))
+    df = pd.read_parquet(BytesIO(contenido))
+    for col in COLUMNAS_ESTACION:
+        if col not in df.columns:
+            df[col] = None
+    return _normalizar_tipos(df, _FECHAS_ESTACION, ("restaurada",))
 
 
 def aplicar_evento_estacion(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
@@ -446,7 +485,7 @@ def procesar_estaciones() -> None:
         if checkpoint_nuevo is None or blob.last_modified > checkpoint_nuevo:
             checkpoint_nuevo = blob.last_modified
 
-    escribir_tabla(blob_client, df)
+    escribir_tabla(blob_client, _normalizar_tipos(df, _FECHAS_ESTACION, ("restaurada",)))
     escribir_checkpoint_estaciones(checkpoint_nuevo)
     logging.info(
         f"Procesados {procesados}/{len(blobs_nuevos)} eventos de estacion nuevos. "

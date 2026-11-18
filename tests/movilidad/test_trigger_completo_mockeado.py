@@ -41,10 +41,11 @@ def test_trigger_procesa_un_viaje_finalizado_nuevo():
     })
     silver = ContenedorSilverFalso()
 
+    # Este test es solo de viajes: estaciones tiene sus propios tests abajo.
     with patch.object(
         silver_mod.BlobServiceClient, "from_connection_string",
         return_value=blob_service_client_falso(bronze=bronze, silver=silver),
-    ):
+    ), patch.object(silver_mod, "procesar_estaciones"):
         silver_mod.movilidad_bronze_a_silver(MagicMock())
 
     assert len(silver.tabla_blob.subidas) == 1
@@ -99,3 +100,17 @@ def test_si_falla_estaciones_igual_se_procesan_los_viajes():
          patch.object(silver_mod, "procesar_viajes") as viajes:
         silver_mod.movilidad_bronze_a_silver(MagicMock())
     viajes.assert_called_once()
+
+
+def test_si_falla_estaciones_el_error_queda_en_un_blob_de_silver():
+    """App Insights esta en otra suscripcion: el traceback se guarda en silver."""
+    silver = ContenedorSilverFalso(tablas={"Movilidad Urbana/_ultimo_error_estaciones.txt": None})
+    with patch.object(silver_mod, "procesar_estaciones", side_effect=RuntimeError("boom")), \
+         patch.object(silver_mod, "procesar_viajes"), \
+         patch.object(silver_mod.BlobServiceClient, "from_connection_string",
+                      return_value=blob_service_client_falso(bronze=ContenedorBronzeFalso({}), silver=silver)):
+        silver_mod.movilidad_bronze_a_silver(MagicMock())
+
+    error = silver.tablas_por_nombre["Movilidad Urbana/_ultimo_error_estaciones.txt"].subidas
+    assert len(error) == 1
+    assert b"RuntimeError: boom" in error[0]
