@@ -82,6 +82,12 @@ TOPICOS_DEFAULT = [
     "com.citypass.residuos.CriticidadClimaticaConfirmada",
     "com.citypass.residuos.IntervencionProgramada",
     "com.citypass.residuos.IntervencionActualizada",
+    # Rotura de compatibilidad (17/nov): se agrego "barrio" -- abrio .v2 y las
+    # actualizaciones nuevas (AFECTADA/CANCELADA, casos 1 y 4) van ahi.
+    "com.citypass.residuos.IntervencionActualizada.v2",
+    # Cierre COMPLETADA de una intervencion (evento aparte, no viene como
+    # IntervencionActualizada).
+    "com.citypass.residuos.IntervencionCompletada",
     "com.citypass.turismo.CreacionEvento",
     # Espacios Publicos: "actividades" (eventos/talleres con cupo).
     "com.citypass.espacios.ActividadCreada.v2",
@@ -92,6 +98,15 @@ TOPICOS_DEFAULT = [
     "com.citypass.espacios.ActividadCreada.v3",
     "com.citypass.espacios.ActividadModificada",
     "com.citypass.espacios.CriticidadClimaticaConfirmada",
+    # Espacios afectados por reclamos / incidentes (casos 2 y 4). El topico sin
+    # sufijo quedo vacio: Espacios publica en .v2 desde el 13/nov.
+    "com.citypass.espacios.EspacioPublicoAfectado",
+    "com.citypass.espacios.EspacioPublicoAfectado.v2",
+    # Reservas (caso 6: reservas de ciudadanos vs. eventos totales) y reservas
+    # afectadas por una emergencia en bici (caso 5, A10 del CU-01).
+    "com.citypass.espacios.ReservaCreada",
+    "com.citypass.espacios.ReservaActualizada",
+    "com.citypass.espacios.ReservaAfectada",
     # Grupo 9 (LDAP / Login Federado) -- ver Eventos-login.md.
     "com.citypass.auth.LoginExitoso",
     "com.citypass.auth.TokenRenovado",

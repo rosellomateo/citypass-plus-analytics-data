@@ -78,6 +78,7 @@ COLUMNAS_CONTADOR = [
     "cantidadAfectaciones",
     "estacionesAfectadasDistintas",
     "cantidadBloqueadas",
+    "estacionesBloqueadasDistintas",
     "cantidadPreventivas",
     "cantidadRestauradas",
     "cantidadViajesInterrumpidos",
@@ -90,6 +91,9 @@ def _resumen_estaciones(df_estaciones: pd.DataFrame) -> pd.DataFrame:
     # Afectacion anunciada preventivamente: se publica con afectacionDesde a
     # futuro respecto de cuando se publico el propio evento.
     df["_preventiva"] = df["afectacionDesde"] > df["occurredAt"]
+    # Caso 1 pide "estaciones bloqueadas" como estacionId distintos, no
+    # cantidad de bloqueos: una estacion bloqueada dos veces cuenta una.
+    df["_estacion_bloqueada"] = df["estacionId"].where(df["_bloqueada"])
 
     return (
         df.groupby(COLUMNA_GRANULARIDAD, dropna=False)
@@ -97,6 +101,7 @@ def _resumen_estaciones(df_estaciones: pd.DataFrame) -> pd.DataFrame:
             cantidadAfectaciones=("afectacionId", "count"),
             estacionesAfectadasDistintas=("estacionId", "nunique"),
             cantidadBloqueadas=("_bloqueada", "sum"),
+            estacionesBloqueadasDistintas=("_estacion_bloqueada", "nunique"),
             cantidadPreventivas=("_preventiva", "sum"),
             cantidadRestauradas=("restaurada", "sum"),
         )

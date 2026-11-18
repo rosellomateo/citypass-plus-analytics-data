@@ -197,11 +197,29 @@ def aplicar_evento(df: pd.DataFrame, evento: dict) -> pd.DataFrame | None:
     use_monitor=False,
 )
 def movilidad_bronze_a_silver(timer: func.TimerRequest):
-    """Corre una vez por dia. Lee de bronze/Movilidad Urbana/ solo los blobs
-    subidos despues del checkpoint de la corrida anterior (blobs.last_modified,
-    que pone el propio storage) y aplica los que sean ViajeFinalizado; el
-    resto (afectaciones de estacion) los ignora en silencio, los procesa el
-    otro trigger."""
+    """Corre una vez por dia y arma las DOS tablas de silver de Movilidad:
+    viajes.parquet y estaciones_afectadas.parquet, cada una con su propio
+    checkpoint.
+
+    Las estaciones tenian su propio timer (movilidad_estaciones_bronze_a_silver)
+    pero en Azure no se disparaba: silver de estaciones quedo congelado desde
+    el 15/nov aunque la logica funciona (simulada offline sobre bronze aplica
+    todo sin errores). Este trigger si corre todas las noches -- y es el que
+    dispara scripts/correr_pipeline_azure.ps1 --, asi que ahora procesa las
+    dos cosas. Cada parte va en su propio try: si una falla, la otra igual se
+    actualiza y el error queda en el log."""
+    for nombre, paso in (("viajes", procesar_viajes), ("estaciones", procesar_estaciones)):
+        try:
+            paso()
+        except Exception:
+            logging.exception(f"Fallo el procesamiento de {nombre} de movilidad bronze->silver")
+
+
+def procesar_viajes() -> None:
+    """Lee de bronze/Movilidad Urbana/ solo los blobs subidos despues del
+    checkpoint de viajes (blobs.last_modified, que pone el propio storage) y
+    aplica los que sean ViajeFinalizado; el resto (afectaciones de estacion)
+    los ignora en silencio, los procesa procesar_estaciones()."""
     checkpoint = leer_checkpoint()
     logging.info(f"Corrida diaria de movilidad (viajes) bronze->silver. Checkpoint anterior: {checkpoint}")
 
@@ -387,16 +405,11 @@ def aplicar_evento_estacion(df: pd.DataFrame, evento: dict) -> pd.DataFrame | No
     return None
 
 
-@bp.timer_trigger(
-    schedule="0 0 0 * * *",
-    arg_name="timer",
-    run_on_startup=False,
-    use_monitor=False,
-)
-def movilidad_estaciones_bronze_a_silver(timer: func.TimerRequest):
-    """Corre una vez por dia. Lee de bronze/Movilidad Urbana/ solo los blobs
-    subidos despues del checkpoint de estaciones (propio, independiente del
-    de viajes) y aplica los que sean EstacionUrbanaAfectada/Restaurada."""
+def procesar_estaciones() -> None:
+    """Lee de bronze/Movilidad Urbana/ solo los blobs subidos despues del
+    checkpoint de estaciones (propio, independiente del de viajes) y aplica
+    los que sean EstacionUrbanaAfectada/Restaurada. Lo llama
+    movilidad_bronze_a_silver (ya no tiene timer propio, ver ahi por que)."""
     checkpoint = leer_checkpoint_estaciones()
     logging.info(f"Corrida diaria de movilidad (estaciones) bronze->silver. Checkpoint anterior: {checkpoint}")
 

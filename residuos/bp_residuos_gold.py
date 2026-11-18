@@ -1,9 +1,24 @@
 """Capa gold de gestion de residuos inteligente (intervenciones, Grupo 6).
 
 Timer trigger diario que agrega la tabla completa de silver/Gestion de
-Residuos Inteligente/intervenciones.parquet por estado_actual/causaTipo, y
-guarda el resultado en gold/Gestion de Residuos Inteligente/
-intervenciones_resumen.parquet.
+Residuos Inteligente/intervenciones.parquet y guarda el resultado en
+gold/Gestion de Residuos Inteligente/intervenciones_resumen.parquet.
+
+Grano [estado_actual, causaTipo, causaTipoAfectacion, barrio,
+origenProgramacion], pensado para las metricas de Residuos de los 6 casos
+de uso (MODELADO_EVENTOS_PARTE2.md, 4.3):
+  1. Cuadrillas afectadas por clima -> causaTipoAfectacion = EVENTO_CLIMATICO
+     (cantidadAfectadas / cantidadCanceladas)
+  2. Cuadrillas por reclamo, por barrio -> causaTipo = RECLAMO, agrupar por barrio
+  3. Cuadrillas para el evento masivo -> causaTipo = EVENTO_PUBLICO
+  4. Cuadrillas afectadas por incidentes -> causaTipoAfectacion = INCIDENTE_VIAL
+  5. Por accidente vs. por alertas normales -> origenProgramacion
+     EMERGENCIA (emergenciaId no nulo) vs. ALERTA (alertaId no nulo)
+  6. Cuadrillas cerca del espacio reservado -> causaTipo = RESERVA
+
+causaTipo es la causa de la PROGRAMACION y causaTipoAfectacion la de la
+AFECTACION/CANCELACION (ver bp_residuos_silver.py). camionesDistintos es por
+fila: no se puede sumar entre filas (el mismo camion puede estar en varias).
 
 Al igual que en gold de reclamos/emergencias, aca no hay incremental/
 checkpoint: cada corrida recalcula el resumen entero a partir de la tabla de
@@ -28,7 +43,7 @@ bp = func.Blueprint()
 GOLD_CONTAINER_NAME = "gold"
 TABLA_RESIDUOS_GOLD_BLOB = "Gestion de Residuos Inteligente/intervenciones_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["estado_actual", "causaTipo"]
+COLUMNAS_GRANULARIDAD = ["estado_actual", "causaTipo", "causaTipoAfectacion", "barrio", "origenProgramacion"]
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
@@ -50,16 +65,40 @@ def _get_gold_blob_client(nombre_blob: str = TABLA_RESIDUOS_GOLD_BLOB):
 
 # --- Agregacion --------------------------------------------------------------
 
+def _origen_programacion(df: pd.DataFrame) -> pd.Series:
+    """Caso 5: EMERGENCIA si la intervencion se programo por una emergencia
+    (emergenciaId no nulo), ALERTA si fue por una alerta propia de Residuos
+    (alertaId no nulo), y NINGUNO si no tiene ninguna de las dos."""
+    origen = pd.Series("NINGUNO", index=df.index, dtype="object")
+    origen[df["alertaId"].notna()] = "ALERTA"
+    origen[df["emergenciaId"].notna()] = "EMERGENCIA"
+    return origen
+
+
 def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = None) -> pd.DataFrame:
-    """Una fila por combinacion de estado_actual/causaTipo, con la cantidad
-    de intervenciones y cuantas ya quedaron afectadas. fecha_snapshot marca
-    el momento en que se calculo este resumen (por defecto, hoy); se puede
-    pasar explicito para reprocesos."""
+    """Una fila por combinacion de la granularidad, con la cantidad de
+    intervenciones, cuantas quedaron afectadas / canceladas / completadas y
+    cuantos camiones distintos participaron. fecha_snapshot marca el momento
+    en que se calculo este resumen (por defecto, hoy); se puede pasar
+    explicito para reprocesos."""
+    df = df_silver.copy()
+    for col in ("causaTipo", "causaTipoAfectacion", "barrio", "emergenciaId", "alertaId", "camionId"):
+        if col not in df.columns:
+            df[col] = None
+    for col in ("afectada", "cancelada", "completada"):
+        if col not in df.columns:
+            df[col] = False
+        df[col] = df[col].fillna(False).astype(bool)
+    df["origenProgramacion"] = _origen_programacion(df)
+
     resumen = (
-        df_silver.groupby(COLUMNAS_GRANULARIDAD, dropna=False)
+        df.groupby(COLUMNAS_GRANULARIDAD, dropna=False)
         .agg(
             cantidadIntervenciones=("intervencionId", "count"),
             cantidadAfectadas=("afectada", "sum"),
+            cantidadCanceladas=("cancelada", "sum"),
+            cantidadCompletadas=("completada", "sum"),
+            camionesDistintos=("camionId", "nunique"),
         )
         .reset_index()
     )

@@ -118,6 +118,24 @@ def test_evento_repetido_no_se_duplica_en_bronze_pero_se_commitea():
     assert consumer.commits == [1, 2]
 
 
+def test_received_at_como_datetime_tambien_deduplica():
+    """El AvroDeserializer devuelve receivedAt como datetime (timestamp-millis),
+    no como int. Antes eso caia en "hora actual + id al azar" y cada relectura
+    del bus duplicaba el blob."""
+    recibido = datetime(2026, 8, 12, 15, 5, 43, tzinfo=timezone.utc)
+    evento = _evento("aaaaaaaa-1", received_at=recibido, reclamoId="R-1")
+    bronze = ContenedorBronzeEscribibleFalso()
+    consumer = ConsumerFalso([MensajeFalso(evento, offset=1), MensajeFalso(evento, offset=2)])
+
+    stats = kafka_mod.consumir_lote(consumer, _deserializar_identidad, bronze, reloj=RelojFalso())
+
+    assert stats["guardados"] == 1
+    assert stats["duplicados"] == 1
+    assert [nombre for nombre, _ in bronze.subidas] == [
+        "Reclamos/ReclamoCreado/ReclamoCreado_20260812_150543_aaaaaaaa.json",
+    ]
+
+
 def test_si_falla_guardar_en_bronze_no_se_commitea():
     class BronzeRoto:
         def upload_blob(self, name, data, overwrite=False):

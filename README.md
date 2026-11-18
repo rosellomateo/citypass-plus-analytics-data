@@ -55,6 +55,45 @@ DOMINIOS = {
 }
 ```
 
+## Silver y gold: tablas y de dónde sale cada caso de uso
+
+Silver corre todos los días a las 00:00 UTC (incremental, con un checkpoint por tabla) y gold a la 01:00 UTC
+(recalcula todo y guarda un snapshot semanal los domingos). Para dispararlos a mano: `scripts/correr_pipeline_azure.ps1`.
+
+| Dominio | Trigger silver | Tablas silver | Tablas gold |
+|---|---|---|---|
+| Reclamos | `reclamos_bronze_a_silver` | `reclamos.parquet` | `reclamos_resumen` |
+| Emergencias | `emergencias_bronze_a_silver` | `emergencias.parquet` | `emergencias_resumen` |
+| Espacios | `espacios_actividades_bronze_a_silver` | `actividades.parquet`, `espacios_afectados.parquet`, `reservas.parquet` | `actividades_resumen`, `espacios_afectados_resumen`, `reservas_resumen` |
+| Residuos | `residuos_bronze_a_silver` | `intervenciones.parquet` | `intervenciones_resumen` |
+| Movilidad | `movilidad_bronze_a_silver` (viajes **y** estaciones) | `viajes.parquet`, `estaciones_afectadas.parquet` | `movilidad_resumen` |
+| LDAP | `autenticacion_bronze_a_silver` | `eventos_autenticacion.parquet` | `autenticacion_resumen` |
+
+Las métricas de los 6 casos de uso (`MODELADO_EVENTOS_PARTE2.md`) salen de gold filtrando por estas columnas:
+
+| Caso | Espacios | Residuos | Reclamos | Emergencias | Movilidad |
+|---|---|---|---|---|---|
+| 1 Evento climático | `actividades_resumen.cantidadAfectadasPorClima` (categoria CULTURAL) | `causaTipoAfectacion = EVENTO_CLIMATICO` | `causaTipo = EVENTO_CLIMATICO` | `causaTipo = EVENTO_CLIMATICO`, `criticidadAfectada` | `estacionesBloqueadasDistintas` (EVENTO_CLIMATICO) |
+| 2 Reclamo | `espacios_afectados_resumen` con `causaTipo = RECLAMO` | `causaTipo = RECLAMO`, por `barrio` | `afectaOtrosModulos = true` | `causaTipo = RECLAMO` | `cantidadAfectaciones` (RECLAMO) |
+| 3 Evento masivo | `actividades_resumen.cantidadMasivas` | `causaTipo = EVENTO_PUBLICO` | `causaTipo = EVENTO_PUBLICO` | `categoria = PREVENTIVA` | `cantidadPreventivas` (EVENTO_PUBLICO) |
+| 4 Incidente vial | `espacios_afectados_resumen` con `causaTipo = INCIDENTE_VIAL` | `causaTipoAfectacion = INCIDENTE_VIAL` | `causaTipo = INCIDENTE_VIAL` | `causaTipo = INCIDENTE_VIAL` | `cantidadAfectaciones` (INCIDENTE_VIAL) |
+| 5 Emergencia en bici | `reservas_resumen` con `afectada = true` | `origenProgramacion` EMERGENCIA vs. ALERTA | `vinculadoEmergenciaBici = true` vs. categoría BACHES/TRANSITO | `causaTipo = MOVILIDAD_BICICLETA`, `tiempoPromResolucion` | `cantidadViajesInterrumpidos` INCIDENTE_VIAL vs. NORMAL |
+| 6 Reserva | `reservas_resumen` (`tipoReserva = ESPACIO`, CONFIRMADA) vs. total de actividades | `causaTipo = RESERVA` | `causaTipo = RESERVA` | `causaTipo = RESERVA` | `cantidadAfectaciones` (RESERVA) |
+
+Notas:
+
+- **Residuos tiene dos causas.** `causaTipo` es por qué se programó la intervención (viene en `IntervencionProgramada`) y
+  `causaTipoAfectacion` es por qué quedó AFECTADA o CANCELADA (viene en `IntervencionActualizada`, también en el tópico `.v2`). Estados:
+  PROGRAMADA, AFECTADA, CANCELADA y COMPLETADA (esta última llega como `IntervencionCompletada`).
+- **Movilidad:** las estaciones afectadas se procesan dentro de `movilidad_bronze_a_silver`. El timer propio que tenían
+  (`movilidad_estaciones_bronze_a_silver`) no se disparaba en Azure y silver de estaciones quedó congelado desde el 15/11.
+- **Columnas que no se suman entre filas:** las que cuentan distintos (`estacionesAfectadasDistintas`, `espaciosDistintos`,
+  `camionesDistintos`) se calculan por fila.
+- **Reclamos cruza con otros módulos:** gold lee el silver de Residuos, Movilidad, Espacios y Emergencias. Si alguna de esas
+  tablas no se puede leer, la columna correspondiente queda en `false` y el resumen se escribe igual.
+- **Después de un cambio en silver de Residuos** hay que reprocesarlo completo (`scripts/reprocesar_residuos_silver.py`)
+  para recalcular las intervenciones que ya estaban.
+
 ## Requisitos
 
 - Python 3.11

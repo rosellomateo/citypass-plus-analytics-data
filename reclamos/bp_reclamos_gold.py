@@ -5,6 +5,18 @@ reclamos.parquet por barrio/categoria/prioridad/origenClasificacion/
 estado_actual/causaTipo, y guarda el resultado en
 gold/Reclamos/reclamos_resumen.parquet.
 
+Dos columnas cruzan con otros modulos (MODELADO_EVENTOS_PARTE2.md 4.1 y 7):
+  - afectaOtrosModulos (caso 2): el reclamoId aparece como causaId con
+    causaTipo = RECLAMO en silver de Residuos, Movilidad (estaciones),
+    Espacios (actividades y espacios afectados) o Emergencias. Es la cuenta
+    inversa: "reclamos que afectan a los demas modulos".
+  - vinculadoEmergenciaBici (caso 5): el correlationId/causaId del reclamo es
+    el emergenciaId de una emergencia durante un viaje en bici (Emergencias
+    las marca con causaTipo = MOVILIDAD_BICICLETA). Comparar contra el resto
+    de reclamos de via (categoria BACHES/TRANSITO).
+Si alguna de esas tablas no se puede leer, la columna queda en False para
+todos (se loguea) y el resumen se escribe igual.
+
 A diferencia de silver, aca no hay incremental/checkpoint: como es una
 agregacion (GROUP BY), cada corrida la recalcula entera a partir de la tabla
 de silver actual. Los domingos, ademas de sobreescribir la tabla principal,
@@ -28,7 +40,12 @@ bp = func.Blueprint()
 GOLD_CONTAINER_NAME = "gold"
 TABLA_RECLAMOS_GOLD_BLOB = "Reclamos/reclamos_resumen.parquet"
 
-COLUMNAS_GRANULARIDAD = ["barrio", "categoria", "prioridad", "origenClasificacion", "estado_actual", "causaTipo"]
+COLUMNAS_GRANULARIDAD = [
+    "barrio", "categoria", "prioridad", "origenClasificacion", "estado_actual", "causaTipo",
+    "afectaOtrosModulos", "vinculadoEmergenciaBici",
+]
+
+CAUSA_TIPO_EMERGENCIA_BICI = "MOVILIDAD_BICICLETA"
 
 
 # --- Acceso a storage (gold) -----------------------------------------------
@@ -60,13 +77,50 @@ def _fecha_estado_actual(fila: pd.Series):
     return fila[columna]
 
 
-def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = None) -> pd.DataFrame:
+def reclamos_referenciados(tablas: list[pd.DataFrame]) -> set[str]:
+    """reclamoId que aparecen como causaId (causaTipo = RECLAMO) en las
+    tablas de silver de los otros modulos."""
+    ids: set[str] = set()
+    for df in tablas:
+        if df is None or df.empty or "causaId" not in df.columns or "causaTipo" not in df.columns:
+            continue
+        ids |= set(df.loc[df["causaTipo"] == "RECLAMO", "causaId"].dropna().astype(str))
+    return ids
+
+
+def emergencias_en_bici(df_emergencias: pd.DataFrame | None) -> set[str]:
+    """Ids (emergenciaId, correlationId y causaId) de las emergencias
+    ocurridas durante un viaje en bici (caso 5)."""
+    if df_emergencias is None or df_emergencias.empty or "causaTipo" not in df_emergencias.columns:
+        return set()
+    bici = df_emergencias[df_emergencias["causaTipo"] == CAUSA_TIPO_EMERGENCIA_BICI]
+    ids: set[str] = set()
+    for col in ("emergenciaId", "correlationId", "causaId"):
+        if col in bici.columns:
+            ids |= set(bici[col].dropna().astype(str))
+    return ids
+
+
+def calcular_resumen(
+    df_silver: pd.DataFrame,
+    fecha_snapshot: datetime | None = None,
+    referenciados: set[str] | None = None,
+    emergencias_bici: set[str] | None = None,
+) -> pd.DataFrame:
     """Una fila por combinacion de barrio/categoria/prioridad/
     origenClasificacion/estado_actual, con la cantidad de reclamos y el
     promedio de horas entre fecha_creado y la fecha en la que llegaron a su
     estado_actual. fecha_snapshot marca el momento en que se calculo este
     resumen (por defecto, ahora); se puede pasar explicito para reprocesos."""
     df = df_silver.copy()
+    referenciados = referenciados or set()
+    emergencias_bici = emergencias_bici or set()
+    df["afectaOtrosModulos"] = df["reclamoId"].astype(str).isin(referenciados)
+    vinculo = pd.Series(False, index=df.index)
+    for col in ("correlationId", "causaId"):
+        if col in df.columns:
+            vinculo |= df[col].astype(str).isin(emergencias_bici)
+    df["vinculadoEmergenciaBici"] = vinculo
     df["_fecha_estado_actual"] = df.apply(_fecha_estado_actual, axis=1)
     df["_horas_hasta_estado_actual"] = (
         (df["_fecha_estado_actual"] - df["fecha_creado"]).dt.total_seconds() / 3600
@@ -82,6 +136,31 @@ def calcular_resumen(df_silver: pd.DataFrame, fecha_snapshot: datetime | None = 
     )
     resumen["fecha_snapshot"] = (fecha_snapshot or datetime.now(timezone.utc)).date()
     return resumen
+
+
+def _leer_tablas_de_otros_modulos() -> tuple[list[pd.DataFrame], pd.DataFrame | None]:
+    """Silver de los modulos que pueden tener causaTipo = RECLAMO, mas el de
+    Emergencias (para el caso 5). Una tabla que falla se saltea."""
+    from emergencias import bp_emergencias_silver as emergencias
+    from espacios import bp_espacios_silver as espacios
+    from movilidad import bp_movilidad_silver as movilidad
+    from residuos import bp_residuos_silver as residuos
+
+    lectores = {
+        "residuos": lambda: residuos.leer_tabla(residuos.get_blob_client()),
+        "movilidad estaciones": lambda: movilidad.leer_tabla_estaciones(movilidad.get_blob_client_estaciones()),
+        "espacios actividades": lambda: espacios.leer_tabla_actividades(espacios.get_blob_client_actividades()),
+        "espacios afectados": lambda: espacios._leer_tabla(
+            espacios.TABLA_AFECTADOS_BLOB, espacios.dataframe_vacio_afectados, espacios.COLUMNAS_AFECTADO),
+        "emergencias": lambda: emergencias.leer_tabla(emergencias.get_blob_client()),
+    }
+    tablas: dict[str, pd.DataFrame] = {}
+    for nombre, leer in lectores.items():
+        try:
+            tablas[nombre] = leer()
+        except Exception:
+            logging.exception(f"No se pudo leer silver de {nombre} para los cruces de reclamos")
+    return list(tablas.values()), tablas.get("emergencias")
 
 
 # --- Nombrado y escritura del resultado -------------------------------------
@@ -117,7 +196,13 @@ def reclamos_silver_a_gold(timer: func.TimerRequest):
     fecha_snapshot = datetime.now(timezone.utc)
 
     df_silver = leer_tabla(get_silver_blob_client())
-    resumen = calcular_resumen(df_silver, fecha_snapshot=fecha_snapshot)
+    otras, df_emergencias = _leer_tablas_de_otros_modulos()
+    resumen = calcular_resumen(
+        df_silver,
+        fecha_snapshot=fecha_snapshot,
+        referenciados=reclamos_referenciados(otras),
+        emergencias_bici=emergencias_en_bici(df_emergencias),
+    )
     escribir_resumen(resumen)
 
     if fecha_snapshot.weekday() == 6:  # domingo

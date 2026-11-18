@@ -169,3 +169,117 @@ def test_intervencion_con_causa_carga_causaid_y_causatipo():
     fila = df[df["intervencionId"] == "I-008"].iloc[0]
     assert fila["causaId"] == "EVT-001"
     assert fila["causaTipo"] == "EVENTO_PUBLICO"
+
+
+# --- Casos 1 y 4: causa de la afectacion, CANCELADA, COMPLETADA, .v2 -------
+
+def _actualizada_con_causa(intervencion_id, estado_nuevo, updated_at, causa_tipo,
+                           event_type="com.citypass.residuos.IntervencionActualizada", barrio=None):
+    evento = _evento_actualizada(intervencion_id, "PROGRAMADA", estado_nuevo, updated_at)
+    evento["metadata"]["eventType"] = event_type
+    evento["data"]["causaId"] = f"causa-{causa_tipo}"
+    evento["data"]["causaTipo"] = causa_tipo
+    if barrio is not None:
+        evento["data"]["barrio"] = barrio
+    return evento
+
+
+def test_la_causa_de_la_afectacion_no_pisa_la_de_la_programacion():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_programada("I-1", t0, causa_id="R-9", causa_tipo="RECLAMO"))
+    df = aplicar_evento(df, _actualizada_con_causa("I-1", "AFECTADA", t0, "EVENTO_CLIMATICO"))
+
+    fila = df.iloc[0]
+    assert fila["causaTipo"] == "RECLAMO"
+    assert fila["causaId"] == "R-9"
+    assert fila["causaTipoAfectacion"] == "EVENTO_CLIMATICO"
+    assert fila["estado_actual"] == "AFECTADA"
+
+
+def test_las_dos_causas_sobreviven_aunque_la_actualizada_llegue_primero():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _actualizada_con_causa("I-1", "AFECTADA", t0, "INCIDENTE_VIAL"))
+    df = aplicar_evento(df, _evento_programada("I-1", t0, causa_tipo="EVENTO_PUBLICO", causa_id="E-1"))
+
+    fila = df.iloc[0]
+    assert fila["causaTipo"] == "EVENTO_PUBLICO"
+    assert fila["causaTipoAfectacion"] == "INCIDENTE_VIAL"
+    assert fila["camionId"] == "QA124ZZ"  # la Programada (camionId null) no lo pisa
+    assert fila["estado_actual"] == "AFECTADA"
+
+
+def test_cancelada_se_aplica_y_es_el_estado_actual():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_programada("I-1", t0))
+    df = aplicar_evento(df, _actualizada_con_causa("I-1", "CANCELADA", t0, "INCIDENTE_VIAL"))
+
+    fila = df.iloc[0]
+    assert fila["estado_actual"] == "CANCELADA"
+    assert bool(fila["cancelada"]) is True
+    assert bool(fila["afectada"]) is False
+
+
+def test_topico_v2_se_procesa_igual_y_trae_barrio_si_no_hay_coordenadas():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _actualizada_con_causa(
+        "I-1", "AFECTADA", t0, "EVENTO_CLIMATICO",
+        event_type="com.citypass.residuos.IntervencionActualizada.v2", barrio="Palermo",
+    ))
+
+    fila = df.iloc[0]
+    assert fila["estado_actual"] == "AFECTADA"
+    assert fila["barrio"] == "Palermo"
+
+
+def test_completada_cierra_la_intervencion():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_programada("I-1", t0))
+    df = aplicar_evento(df, {
+        "metadata": {"eventType": "com.citypass.residuos.IntervencionCompletada"},
+        "data": {"intervencionId": "I-1", "emergenciaId": "E-7",
+                 "completadaEn": _epoch_ms(datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc))},
+    })
+
+    fila = df.iloc[0]
+    assert fila["estado_actual"] == "COMPLETADA"
+    assert bool(fila["completada"]) is True
+    assert fila["emergenciaId"] == "E-7"
+
+
+def test_el_cierre_mas_reciente_define_el_estado_actual():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = dataframe_vacio()
+    df = aplicar_evento(df, _evento_programada("I-1", t0))
+    df = aplicar_evento(df, _actualizada_con_causa("I-1", "AFECTADA", datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc), "EVENTO_CLIMATICO"))
+    df = aplicar_evento(df, {
+        "metadata": {"eventType": "com.citypass.residuos.IntervencionCompletada"},
+        "data": {"intervencionId": "I-1", "completadaEn": "2026-09-01T12:00:00Z"},
+    })
+
+    assert df.iloc[0]["estado_actual"] == "COMPLETADA"
+
+
+def test_barrio_sale_de_las_coordenadas():
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    evento = _evento_programada("I-1", t0)
+    evento["data"]["latitud"] = -34.5875   # Palermo
+    evento["data"]["longitud"] = -58.4205
+    df = aplicar_evento(dataframe_vacio(), evento)
+
+    assert df.iloc[0]["barrio"] == "PALERMO" or df.iloc[0]["barrio"].upper() == "PALERMO"
+
+
+def test_tabla_vieja_sin_columnas_nuevas_se_completa():
+    from residuos.bp_residuos_silver import completar_columnas
+    vieja = dataframe_vacio().drop(columns=["fecha_cancelada", "fecha_completada", "causaTipoAfectacion",
+                                            "causaIdAfectacion", "barrio", "cancelada", "completada"])
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    df = aplicar_evento(vieja, _actualizada_con_causa("I-1", "CANCELADA", t0, "INCIDENTE_VIAL"))
+
+    assert list(completar_columnas(df).columns) == list(dataframe_vacio().columns)
+    assert df.iloc[0]["estado_actual"] == "CANCELADA"

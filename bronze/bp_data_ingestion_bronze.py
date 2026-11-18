@@ -62,7 +62,15 @@ def armar_nombre_blob(evento, event_type_default: str = "") -> str:
 
     received_at = metadata.get("receivedAt")
     event_id = metadata.get("eventId")
-    if isinstance(received_at, (int, float)) and event_id:
+    # Por HTTP receivedAt llega como epoch millis; por Kafka el AvroDeserializer
+    # lo devuelve como datetime (logical type timestamp-millis). Si solo se
+    # aceptara el int, todo lo de Kafka caeria en la rama de "hora actual + id
+    # al azar" y cada relectura del bus duplicaria los blobs.
+    if isinstance(received_at, datetime) and event_id:
+        momento = received_at if received_at.tzinfo else received_at.replace(tzinfo=timezone.utc)
+        momento = momento.astimezone(timezone.utc)
+        id_corto = str(event_id)[:8]
+    elif isinstance(received_at, (int, float)) and event_id:
         momento = datetime.fromtimestamp(received_at / 1000, tz=timezone.utc)
         id_corto = str(event_id)[:8]
     else:

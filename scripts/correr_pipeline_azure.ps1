@@ -23,7 +23,7 @@
 #>
 
 param(
-    [string]$Dominio = ""  # vacio = todos; o uno de: reclamos, movilidad, residuos, espacios, emergencias
+    [string]$Dominio = ""  # vacio = todos; o uno de: reclamos, movilidad, residuos, espacios, emergencias, autenticacion
 )
 
 # --- Completar antes de correr -------------------------------------------
@@ -49,7 +49,19 @@ if ($MASTER_KEY -eq "PEGAR_ACA_LA_MASTER_KEY_DEL_PORTAL") {
 $BASE_URL = "https://$FUNCTION_APP_HOSTNAME/admin/functions"
 $SEGUNDOS_ESPERA_ENTRE_SILVER_Y_GOLD = 20
 
-$DOMINIOS_TODOS = @("reclamos", "movilidad", "residuos", "espacios", "emergencias")
+$DOMINIOS_TODOS = @("reclamos", "movilidad", "residuos", "espacios", "emergencias", "autenticacion")
+
+# Prefijo real de las funciones de cada dominio. Espacios se llama
+# espacios_actividades_* (y arma actividades, espacios afectados y reservas);
+# movilidad_bronze_a_silver arma viajes Y estaciones afectadas.
+$PREFIJO_FUNCION = @{
+    "reclamos"      = "reclamos"
+    "movilidad"     = "movilidad"
+    "residuos"      = "residuos"
+    "espacios"      = "espacios_actividades"
+    "emergencias"   = "emergencias"
+    "autenticacion" = "autenticacion"
+}
 $dominios = if ($Dominio) { @($Dominio) } else { $DOMINIOS_TODOS }
 
 function Invoke-FuncionAzure {
@@ -78,11 +90,12 @@ if ([string]::IsNullOrWhiteSpace($MASTER_KEY)) {
 foreach ($d in $dominios) {
     Write-Host "`n=== $d ===" -ForegroundColor Cyan
 
-    Invoke-FuncionAzure "${d}_bronze_a_silver"
+    $f = $PREFIJO_FUNCION[$d]
+    Invoke-FuncionAzure "${f}_bronze_a_silver"
     Write-Host "  Esperando $SEGUNDOS_ESPERA_ENTRE_SILVER_Y_GOLD s a que termine silver antes de correr gold..."
     Start-Sleep -Seconds $SEGUNDOS_ESPERA_ENTRE_SILVER_Y_GOLD
 
-    Invoke-FuncionAzure "${d}_silver_a_gold"
+    Invoke-FuncionAzure "${f}_silver_a_gold"
 }
 
 Write-Host "`nListo. Revisa 'Registros' (Log stream) de cada funcion en el portal para confirmar que no hubo errores." -ForegroundColor Cyan
