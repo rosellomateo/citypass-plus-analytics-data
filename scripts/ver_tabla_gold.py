@@ -25,7 +25,7 @@ CONTAINER = "gold"
 # Agregar una entrada por cada dominio nuevo que tenga su propia tabla de gold.
 TABLAS = {
     "reclamos": {"path": "Reclamos/reclamos_resumen.parquet", "columna_orden": "row_count"},
-    "movilidad": {"path": "Movilidad Urbana/movilidad_resumen.parquet", "columna_orden": "cantidadAfectaciones"},
+    "movilidad": {"path": "Movilidad Urbana/viajes_resumen.parquet", "columna_orden": "cantidadAfectaciones"},
     "residuos": {"path": "Gestion de Residuos Inteligente/intervenciones_resumen.parquet", "columna_orden": "cantidadIntervenciones"},
     "espacios": {"path": "Espacios Publicos y Cultura/actividades_resumen.parquet", "columna_orden": "cantidadActividades"},
     "emergencias": {"path": "Emergencias y Seguridad/emergencias_resumen.parquet", "columna_orden": "cantidadEmergencias"},
@@ -111,4 +111,4 @@ if __name__ == "__main__":
         main()
     else:
         # Se corrio desde el editor sin argumentos: editar estos valores a mano.
-        mostrar_tabla(dominio="movilidad")
+        mostrar_tabla(dominio="residuos")

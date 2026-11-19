@@ -58,7 +58,7 @@ def test_trigger_gold_combina_las_dos_tablas_y_guarda_snapshot_los_domingos():
         datetime_mock.now.return_value = fecha_domingo
         gold_mod.movilidad_silver_a_gold(MagicMock())
 
-    acumulado = gold._blobs["Movilidad Urbana/movilidad_resumen.parquet"]
+    acumulado = gold._blobs["Movilidad Urbana/viajes_resumen.parquet"]
     assert len(acumulado.subidas) == 1
     df_resumen = pd.read_parquet(BytesIO(acumulado.subidas[0]))
 
@@ -76,6 +76,6 @@ def test_trigger_gold_combina_las_dos_tablas_y_guarda_snapshot_los_domingos():
     assert fila_normal["cantidadAfectaciones"] == 0
 
     anio, semana, _ = fecha_domingo.isocalendar()
-    nombre_snapshot = f"Movilidad Urbana/movilidad_resumen_{semana:02d}_{anio}.parquet"
+    nombre_snapshot = f"Movilidad Urbana/viajes_resumen_{semana:02d}_{anio}.parquet"
     assert nombre_snapshot in gold._blobs
     assert len(gold._blobs[nombre_snapshot].subidas) == 1

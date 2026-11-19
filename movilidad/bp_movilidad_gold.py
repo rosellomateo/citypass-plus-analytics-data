@@ -5,7 +5,7 @@ Timer trigger diario que combina las DOS tablas de silver/Movilidad Urbana/
 por `causaTipo` -- el enum que comparten los dos eventos (EstacionUrbanaAfectada
 y ViajeFinalizado) y que unifica el grano aunque las dos tablas tengan una
 entidad de base distinta (una estacion afectada vs. un viaje). El resultado
-se guarda en gold/Movilidad Urbana/movilidad_resumen.parquet.
+se guarda en gold/Movilidad Urbana/viajes_resumen.parquet.
 
 Cubre las 6 metricas de CONTRATO_MOVILIDAD.md seccion 5, todas filtrando por
 causaTipo sobre esta misma tabla:
@@ -50,7 +50,7 @@ from .bp_movilidad_silver import get_blob_client_estaciones as get_silver_blob_c
 bp = func.Blueprint()
 
 GOLD_CONTAINER_NAME = "gold"
-TABLA_MOVILIDAD_GOLD_BLOB = "Movilidad Urbana/movilidad_resumen.parquet"
+TABLA_MOVILIDAD_GOLD_BLOB = "Movilidad Urbana/viajes_resumen.parquet"
 
 COLUMNA_GRANULARIDAD = "causaTipo"
 
@@ -151,7 +151,7 @@ def nombre_snapshot_semanal(fecha: datetime) -> str:
     """Nombre del parquet de snapshot semanal (se guarda los domingos), con
     la semana ISO del año en la que cae `fecha`."""
     anio, semana, _ = fecha.isocalendar()
-    return f"Movilidad Urbana/movilidad_resumen_{semana:02d}_{anio}.parquet"
+    return f"Movilidad Urbana/viajes_resumen_{semana:02d}_{anio}.parquet"
 
 
 def escribir_resumen(df_resumen: pd.DataFrame, nombre_blob: str = TABLA_MOVILIDAD_GOLD_BLOB) -> None:
